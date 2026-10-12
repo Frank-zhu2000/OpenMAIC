@@ -99,6 +99,16 @@ async function chat(req: NextRequest, principal: OwnerPrincipal): Promise<Respon
       return apiError('INVALID_REQUEST', 400, 'Courseware references are disabled');
     }
 
+    // Null members throw on scene.id / scene.order in reference lookup and in
+    // later scene iteration. Slide lookup already rejects this shape; doing it
+    // once here covers every path before reference resolution and model resolution.
+    if (
+      Array.isArray(body.storeState.scenes) &&
+      body.storeState.scenes.some((scene) => scene == null)
+    ) {
+      return apiError('INVALID_REQUEST', 400, 'storeState.scenes must not contain empty members');
+    }
+
     let elementReference;
     try {
       elementReference = resolveElementReference(body);

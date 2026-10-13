@@ -276,12 +276,14 @@ export async function generateAgentProfiles(
   - Prefer a voice whose language matches the course language directive
   - Pick a voice that suits each agent's personality and role (e.g. lively voice for energetic student)
   - The voice's gender must match the agent's voiceDesign.identity
+  - Keep the agent's name and persona consistent with that gender
   - Try to use different voices for each non-teacher agent
   - Never assign the fixed teacher narrator voice to any other agent`
       : `- Each agent should be assigned a voice that matches their persona from this list: ${voiceListStr}
   - Prefer a voice whose language matches the course language directive
   - Pick a voice that suits the agent's personality and role (e.g. authoritative voice for teacher, lively voice for energetic student)
   - The voice's gender must match the agent's voiceDesign.identity
+  - Keep the agent's name and persona consistent with that gender
   - Try to use different voices for each agent`
     : '';
 

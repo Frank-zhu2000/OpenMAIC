@@ -154,20 +154,37 @@ export function resolveAgentVoice(
     }
   }
 
-  // Fallback: deterministic pick among enabled providers (canonical order).
-  return resolveDeterministicFallbackVoice(enabledProviders, agentIndex);
+  // Fallback: same-gender catalog voice when the catalogue has one, else index.
+  return resolveDeterministicFallbackVoice(
+    enabledProviders,
+    agentIndex,
+    identityGender(agent.voiceDesign?.identity),
+  );
+}
+
+/** English male/female in voiceDesign.identity. A localized identity has neither word. */
+function identityGender(identity: string | undefined): 'male' | 'female' | undefined {
+  if (!identity) return undefined;
+  const female = /\bfemale\b/i.test(identity);
+  const male = /\bmale\b/i.test(identity);
+  if (female === male) return undefined;
+  return female ? 'female' : 'male';
 }
 
 /**
  * The deterministic last-resort voice pick shared by `resolveAgentVoice` and
  * the narrator fallback: the first ENABLED provider in canonical order and one
  * of its catalog voices (Qwen clones are excluded — only catalog voices are
- * guaranteed usable without account state). Returns null when no enabled
- * provider can serve a voice.
+ * guaranteed usable without account state). When `agentGender` is male or
+ * female and the catalogue lists that gender, the pick stays inside those
+ * voices and still uses `index`. A catalogue with no gender data, or with no
+ * voice of that gender, keeps the index pick over the full list. Returns null
+ * when no enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
   enabledProviders: ProviderWithVoices[],
   index: number,
+  agentGender?: 'male' | 'female',
 ): ResolvedVoice | null {
   if (enabledProviders.length === 0) return null;
   const first = enabledProviders[0];
@@ -176,9 +193,13 @@ export function resolveDeterministicFallbackVoice(
       ? first.voices.filter((voice) => isQwenCatalogVoice(voice.id))
       : first.voices;
   if (fallbackVoices.length === 0) return null;
+  const sameGender = agentGender
+    ? fallbackVoices.filter((voice) => voice.gender === agentGender)
+    : [];
+  const pool = sameGender.length > 0 ? sameGender : fallbackVoices;
   return {
     providerId: first.providerId,
-    voiceId: fallbackVoices[index % fallbackVoices.length].id,
+    voiceId: pool[index % pool.length].id,
   };
 }
 
@@ -287,7 +308,13 @@ export interface ModelVoiceGroup {
 export interface ProviderWithVoices {
   providerId: TTSProviderId;
   providerName: string;
-  voices: Array<{ id: string; name: string; language?: string }>;
+  voices: Array<{
+    id: string;
+    name: string;
+    language?: string;
+    /** Present when the catalogue lists one. Absent means the catalogue has no gender. */
+    gender?: 'male' | 'female' | 'neutral';
+  }>;
   modelGroups: ModelVoiceGroup[]; // voices grouped by model
 }
 
@@ -362,6 +389,7 @@ export function getEnabledProvidersWithVoices(
           id: v.id,
           name: v.name,
           language: v.language,
+          ...(v.gender ? { gender: v.gender } : {}),
         })),
         ...userVoices,
       ];

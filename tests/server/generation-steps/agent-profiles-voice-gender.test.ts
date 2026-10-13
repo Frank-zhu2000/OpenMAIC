@@ -166,6 +166,29 @@ describe('agent profiles — voice gender', () => {
     expect(list.find((voice) => voice.name === '未标注音色')).not.toHaveProperty('gender');
   });
 
+  it("tells the model to keep the agent's name and persona consistent with the matched gender", async () => {
+    const agents = [
+      profile({ name: 'Lin', role: 'teacher', voice: token('male-qn-jingying') }),
+      profile({
+        name: 'Sam',
+        role: 'student',
+        voice: token('female-shaonv'),
+        voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+      }),
+    ];
+    const required = "Keep the agent's name and persona consistent with that gender";
+
+    await generate(agents);
+    const openAssignment = callLLM.mock.calls[0][0].prompt as string;
+    expect(openAssignment).toContain(required);
+
+    await generate(agents, {
+      narratorVoice: { providerId: 'minimax-tts', voiceId: 'female-yujie' },
+    });
+    const pinnedTeacher = callLLM.mock.calls[1][0].prompt as string;
+    expect(pinnedTeacher).toContain(required);
+  });
+
   it('swaps a female identity off a male Chinese voice to an unused same-language female voice', async () => {
     const agents = await generate([
       profile({ name: 'Lin', role: 'teacher', voice: token('male-qn-jingying') }),

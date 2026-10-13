@@ -706,4 +706,66 @@ describe('agent profiles — voice gender', () => {
       (await assign([maleOnNova, femaleOnEcho])).map((entry) => entry.voiceConfig?.voiceId),
     ).toEqual(['nova', 'echo', 'echo']);
   });
+
+  it('prefers an unoccupied male voice when a failed move still occupies echo', async () => {
+    const echoOnyxNova: NonNullable<AgentProfilesInput['availableVoices']> = [
+      {
+        providerId: 'openai-tts',
+        voiceId: 'echo',
+        voiceName: 'Echo',
+        voiceLanguage: 'en',
+        gender: 'male',
+      },
+      {
+        providerId: 'openai-tts',
+        voiceId: 'onyx',
+        voiceName: 'Onyx',
+        voiceLanguage: 'en',
+        gender: 'male',
+      },
+      {
+        providerId: 'openai-tts',
+        voiceId: 'nova',
+        voiceName: 'Nova',
+        voiceLanguage: 'en',
+        gender: 'female',
+      },
+    ];
+    const femaleOnEcho = profile({
+      name: 'Ana',
+      role: 'student',
+      voice: openaiToken('echo'),
+      voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+    });
+    const maleOnNova = profile({
+      name: 'Sam',
+      role: 'student',
+      voice: openaiToken('nova'),
+      voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+    });
+    const teacher = profile({
+      name: 'Lin',
+      role: 'teacher',
+      voiceDesign: {
+        identity: 'middle-aged female teacher',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const assign = (students: unknown[]) =>
+      generate([teacher, ...students], {
+        availableVoices: echoOnyxNova,
+        narratorVoice: { providerId: 'openai-tts', voiceId: 'nova' },
+      });
+
+    // nova is the narrator, so Ana cannot leave echo. That failed move does not
+    // re-lock echo, but onyx is a male voice nobody holds. Sam must take onyx
+    // instead of sharing echo. Both student orders.
+    expect(
+      (await assign([femaleOnEcho, maleOnNova])).map((entry) => entry.voiceConfig?.voiceId),
+    ).toEqual(['nova', 'echo', 'onyx']);
+    expect(
+      (await assign([maleOnNova, femaleOnEcho])).map((entry) => entry.voiceConfig?.voiceId),
+    ).toEqual(['nova', 'onyx', 'echo']);
+  });
 });

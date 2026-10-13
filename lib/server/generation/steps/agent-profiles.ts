@@ -151,18 +151,25 @@ function pickMatchingGenderVoice(
   preferredLanguage: string | undefined,
   usage: Map<string, number>,
   reserved: string | undefined,
+  occupied: Set<string>,
 ): AdvertisedVoice | undefined {
-  const free = voices.filter((voice) => {
+  const matches = voices.filter((voice) => {
     if (voice.gender !== wanted) return false;
     const key = advertisedVoiceToken(voice);
     if (reserved !== undefined && key === reserved) return false;
     return (usage.get(key) ?? 0) <= 0;
   });
-  if (preferredLanguage) {
-    const sameLanguage = free.find((voice) => voice.voiceLanguage === preferredLanguage);
-    if (sameLanguage) return sameLanguage;
-  }
-  return free[0];
+  const choose = (pool: AdvertisedVoice[]): AdvertisedVoice | undefined => {
+    if (preferredLanguage) {
+      const sameLanguage = pool.find((voice) => voice.voiceLanguage === preferredLanguage);
+      if (sameLanguage) return sameLanguage;
+    }
+    return pool[0];
+  };
+  // A failed move leaves the old voice at usage 0 while that agent still
+  // speaks it. Take such a voice only when every unoccupied match is gone.
+  const unoccupied = matches.filter((voice) => !occupied.has(advertisedVoiceToken(voice)));
+  return choose(unoccupied) ?? choose(matches);
 }
 
 /** True when this agent is on a male/female voice of the other gender. */
@@ -182,9 +189,9 @@ function hasOppositeVoiceGender(
  * Move agents off an opposite male or female voice when the catalogue has a
  * free voice of their identity gender. Already-matching voices, unknown and
  * neutral genders, and the fixed narrator binding stay put and are not stolen.
- * A failed move keeps the current voice and does not mark it used, so another
- * agent can still take it. Two agents share a voice only when no free match
- * remains.
+ * A failed move keeps the current voice and does not mark it used. Prefer a
+ * voice nobody still holds, and take that voice only when no unoccupied
+ * same-gender match remains.
  */
 function reconcileOppositeVoiceGenders(
   agents: GeneratedAgentProfile[],
@@ -208,8 +215,9 @@ function reconcileOppositeVoiceGenders(
     usage.set(key, (usage.get(key) ?? 0) + 1);
   }
 
-  // A miss does not put the old voice back into `usage`, so another agent
-  // can still take it. Repeat until a pass moves nobody.
+  // A miss does not put the old voice back into `usage`. The next agent
+  // prefers a voice nobody still holds, and takes this one only when no
+  // unoccupied match remains. Repeat until a pass moves nobody.
   let progressed = true;
   while (progressed) {
     progressed = false;
@@ -219,12 +227,17 @@ function reconcileOppositeVoiceGenders(
       const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
       if (!wanted || !current) continue;
 
+      const occupied = new Set<string>();
+      for (const holder of agents) {
+        if (holder.voiceConfig) occupied.add(advertisedVoiceToken(holder.voiceConfig));
+      }
       const replacement = pickMatchingGenderVoice(
         availableVoices,
         wanted,
         current.voiceLanguage,
         usage,
         reserved,
+        occupied,
       );
       if (!replacement) continue;
       agent.voiceConfig = {

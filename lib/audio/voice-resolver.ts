@@ -79,9 +79,9 @@ export function resolveNarratorVoiceBinding(
 export interface ResolveAgentVoiceOptions {
   /**
    * Agents in the same order as `agentIndex`. When present, a male/female
-   * fallback uses a per-gender ordinal and skips every voice the roster will
-   * actually speak: configured voices, an unbound teacher's provider default,
-   * and earlier same-gender fallbacks. Omit it to keep the index pick.
+   * fallback uses a per-gender ordinal and skips configured voices, the
+   * catalogue default reserved for an unbound teacher, and earlier same-gender
+   * fallbacks. Omit it to keep the index pick.
    */
   roster?: AgentConfig[];
 }
@@ -92,13 +92,15 @@ export interface ResolveAgentVoiceOptions {
  * which already excludes disabled/unconfigured providers and browser-native).
  *
  * 1. If the user picked a voice for this agent (persisted `overrides`, keyed by
- *    agent id) whose provider is in `enabledProviders` (and the voiceId is
- *    known), use it; the agent's own voiceConfig is validated the same way next.
+ *    agent id) whose provider is in `enabledProviders` and can speak that id,
+ *    use it. Browser-native accepts any id once enabled. Qwen accepts a catalog
+ *    id or any non-empty id. Other providers must name a voice the enabled model
+ *    offers. The agent's own voiceConfig is validated the same way next.
  * 2. Otherwise, deterministically pick the first enabled provider. When the
  *    catalogue lists the agent's gender, the pick stays in that male or female
  *    subset. With a roster, that subset uses a per-gender ordinal and skips
- *    every voice the roster will actually speak, including a later configured
- *    voice and an unbound teacher's provider default. Without a roster, or
+ *    configured voices, the catalogue default reserved for an unbound teacher,
+ *    and earlier same-gender fallbacks. Without a roster, or
  *    when that subset is empty (no gender on those voices, or only neutral),
  *    the pick is `agentIndex` modulo the pool. Browser-native is in the pool
  *    only when the caller included it: getEnabledProvidersWithVoices excludes
@@ -142,7 +144,7 @@ function resolveConfiguredAgentVoice(
   // Candidates in priority order: the user's persisted per-agent override
   // (settings store — survives reloads; registry records for default/generated
   // agents do not), then the agent's own voiceConfig. Each is honored only
-  // when its provider is still enabled and the voice is known.
+  // when its provider is still enabled and can speak that id.
   const candidates = [overrides?.[agent.id], agent.voiceConfig];
   for (const choice of candidates) {
     if (!choice) continue;
@@ -257,10 +259,11 @@ function distinctVoiceId(pool: Array<{ id: string }>, used: Set<string>, overflo
 }
 
 /**
- * The voice discussion plays for an unbound teacher: the provider default
- * (`resolveNarratorVoiceBinding` with no usable voiceConfig). When the enabled
- * model cannot speak that id, playback uses the first voice it offers.
- * Undefined for a provider with no built-in default.
+ * Catalogue default for this provider (`DEFAULT_TTS_VOICES`). When the enabled
+ * model cannot speak that id, the first voice it offers. Discussion plays this
+ * for an unbound teacher only when the tts-slot voice is that default; a
+ * user-selected global lecture voice is not read here. Undefined for a provider
+ * with no built-in default.
  */
 function providerDefaultVoiceId(provider: ProviderWithVoices | undefined): string | undefined {
   if (!provider) return undefined;
@@ -271,10 +274,10 @@ function providerDefaultVoiceId(provider: ProviderWithVoices | undefined): strin
 }
 
 /**
- * Voice for one unbound agent of `agentGender`. Reserve every voice the roster
- * will actually speak before allocating fallbacks: a configured voice (including
- * one that appears later) and, for an unbound teacher, the provider default.
- * That reservation does not consume a fallback slot. Earlier unbound agents of
+ * Voice for one unbound agent of `agentGender`. Before allocating fallbacks,
+ * reserve every configured roster voice (including one that appears later) and
+ * the catalogue default for an unbound teacher. That reservation does not
+ * consume a fallback slot. Earlier unbound agents of
  * the same gender then take the remaining voices. An unbound teacher does not
  * take a slot, because discussion playback does not speak this fallback for them.
  */

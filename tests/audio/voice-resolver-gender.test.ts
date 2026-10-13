@@ -284,8 +284,9 @@ describe('resolveAgentVoice gender fallback', () => {
     const females = providers[0].voices
       .filter((voice) => voice.gender === 'female')
       .map((voice) => voice.id);
-    // MiniMax's provider default is the first female voice. Discussion plays
-    // that for a teacher with no voiceConfig; the student must take the next one.
+    // MiniMax's catalogue default is the first female voice. With no global
+    // lecture pick, discussion plays that default for a teacher with no
+    // voiceConfig; the student must take the next one.
     expect(females[0]).toBe('female-yujie');
     expect(females).toContain('female-shaonv');
     const student = agent({

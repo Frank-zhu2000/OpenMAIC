@@ -294,16 +294,26 @@ describe('agent profiles — voice gender', () => {
         },
       }),
       profile({
-        name: 'Sam',
+        name: 'Rui',
         role: 'student',
         voice: token('female-shaonv'),
-        voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+        voiceDesign: {
+          identity: 'aluno adolescente',
+          texture: 'clara',
+          delivery: 'rápida',
+        },
       }),
     ]);
 
+    // One identity sits on a male voice and one on a female voice. Treating
+    // either "no English gender word" as male or as female would move one of them.
     expect(agents[0].voiceConfig).toEqual({
       providerId: 'minimax-tts',
       voiceId: 'male-qn-jingying',
+    });
+    expect(agents[1].voiceConfig).toEqual({
+      providerId: 'minimax-tts',
+      voiceId: 'female-shaonv',
     });
   });
 
@@ -489,5 +499,123 @@ describe('agent profiles — voice gender', () => {
     const prompt = callLLM.mock.calls[0][0].prompt as string;
     expect(prompt).toContain("The voice's gender must match the agent's voiceDesign.identity");
     expect(prompt).toContain('A neutral voice, or a voice with no gender, is not mismatched');
+  });
+
+  /** OpenAI-shaped pool: two male voices, then the two female voices are not adjacent. */
+  const OPENAI_VOICES: NonNullable<AgentProfilesInput['availableVoices']> = [
+    {
+      providerId: 'openai-tts',
+      voiceId: 'echo',
+      voiceName: 'Echo',
+      voiceLanguage: 'en',
+      gender: 'male',
+    },
+    {
+      providerId: 'openai-tts',
+      voiceId: 'nova',
+      voiceName: 'Nova',
+      voiceLanguage: 'en',
+      gender: 'female',
+    },
+    {
+      providerId: 'openai-tts',
+      voiceId: 'onyx',
+      voiceName: 'Onyx',
+      voiceLanguage: 'en',
+      gender: 'male',
+    },
+    {
+      providerId: 'openai-tts',
+      voiceId: 'shimmer',
+      voiceName: 'Shimmer',
+      voiceLanguage: 'en',
+      gender: 'female',
+    },
+  ];
+
+  function openaiToken(voiceId: string): string {
+    return `openai-tts::${voiceId}`;
+  }
+
+  it('frees a matching voice held by a later opposite-gender agent and reassigns everyone', async () => {
+    const agents = await generate(
+      [
+        profile({
+          name: 'Lin',
+          role: 'teacher',
+          voice: openaiToken('echo'),
+          voiceDesign: {
+            identity: 'middle-aged female teacher',
+            texture: 'warm',
+            delivery: 'calm',
+          },
+        }),
+        profile({
+          name: 'Sam',
+          role: 'student',
+          voice: openaiToken('nova'),
+          voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+        }),
+        profile({
+          name: 'Bao',
+          role: 'student',
+          voice: openaiToken('shimmer'),
+          voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+        }),
+      ],
+      { availableVoices: OPENAI_VOICES },
+    );
+
+    // One left-to-right pass leaves echo / onyx / shimmer: the female agent
+    // gives up while both female voices are still held, then a male agent
+    // moves onto onyx and frees nova too late.
+    expect(agents.map((entry) => entry.voiceConfig?.voiceId)).toEqual(['nova', 'echo', 'onyx']);
+  });
+
+  it('reassigns a full opposite-gender permutation when every catalogue voice is already in use', async () => {
+    const agents = await generate(
+      [
+        profile({
+          name: 'Lin',
+          role: 'teacher',
+          voice: openaiToken('echo'),
+          voiceDesign: {
+            identity: 'middle-aged female teacher',
+            texture: 'warm',
+            delivery: 'calm',
+          },
+        }),
+        profile({
+          name: 'Sam',
+          role: 'student',
+          voice: openaiToken('nova'),
+          voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+        }),
+        profile({
+          name: 'Ana',
+          role: 'student',
+          voice: openaiToken('onyx'),
+          voiceDesign: {
+            identity: 'young female student',
+            texture: 'bright',
+            delivery: 'quick',
+          },
+        }),
+        profile({
+          name: 'Bao',
+          role: 'student',
+          voice: openaiToken('shimmer'),
+          voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+        }),
+      ],
+      { availableVoices: OPENAI_VOICES },
+    );
+
+    expect(agents.map((entry) => entry.voiceConfig?.voiceId)).toEqual([
+      'nova',
+      'echo',
+      'shimmer',
+      'onyx',
+    ]);
   });
 });

@@ -78,8 +78,9 @@ export function resolveNarratorVoiceBinding(
 export interface ResolveAgentVoiceOptions {
   /**
    * Agents in the same order as `agentIndex`. When present, a male/female
-   * fallback uses a per-gender ordinal and skips voices already taken, instead
-   * of `agentIndex` modulo the gender subset. Omit it to keep the index pick.
+   * fallback uses a per-gender ordinal and skips every configured voice in
+   * the roster, plus earlier same-gender fallbacks, instead of `agentIndex`
+   * modulo the gender subset. Omit it to keep the index pick.
    */
   roster?: AgentConfig[];
 }
@@ -92,11 +93,15 @@ export interface ResolveAgentVoiceOptions {
  * 1. If the user picked a voice for this agent (persisted `overrides`, keyed by
  *    agent id) whose provider is in `enabledProviders` (and the voiceId is
  *    known), use it; the agent's own voiceConfig is validated the same way next.
- * 2. Otherwise, deterministically pick the first provider in the given list by
- *    index. Whether browser-native can be picked depends on the caller's list:
- *    getEnabledProvidersWithVoices excludes it, getSelectableProvidersWithVoices
- *    appends it LAST, so it is only the index target when it is the sole enabled
- *    provider (i.e. the user opted into browser-native only).
+ * 2. Otherwise, deterministically pick the first enabled provider. When the
+ *    catalogue lists the agent's gender, the pick stays in that male or female
+ *    subset. With a roster, that subset uses a per-gender ordinal and skips
+ *    every configured voice in the roster, not only earlier ones. Without a
+ *    roster, or when that subset is empty (no gender data, or only neutral),
+ *    the pick is `agentIndex` modulo the pool. Browser-native is in the pool
+ *    only when the caller included it: getEnabledProvidersWithVoices excludes
+ *    it, getSelectableProvidersWithVoices appends it LAST, so it is the index
+ *    target only when it is the sole enabled provider.
  * 3. If the list is empty, return null — the caller must skip TTS rather than
  *    silently falling back to browser-native (#665 symptom 4).
  */
@@ -207,8 +212,9 @@ function identityGender(identity: string | undefined): 'male' | 'female' | undef
  * female and the catalogue lists that gender, the pick stays inside those
  * voices. Neutral voices are not male or female, so a neutral-only catalogue
  * keeps the index pick, the same as a catalogue with no gender data. With a
- * roster, the gendered subset uses a per-gender ordinal and skips voices
- * already taken, instead of `index` modulo that subset. Returns null when no
+ * roster, the gendered subset uses a per-gender ordinal and skips every
+ * configured voice in the roster, plus earlier same-gender fallbacks, instead
+ * of `index` modulo that subset. Returns null when no
  * enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
@@ -246,10 +252,13 @@ function distinctVoiceId(pool: Array<{ id: string }>, used: Set<string>, overflo
 }
 
 /**
- * Voice for one unbound agent of `agentGender`. Earlier same-gender fallbacks
- * consume distinct voices; a configured voice is reserved but does not consume
- * a fallback slot. The teacher is skipped: discussion playback uses the
- * narrator binding for that role.
+ * Voice for one unbound agent of `agentGender`. Every configured voice in the
+ * roster is reserved first, including a teacher's usable voiceConfig and voices
+ * that appear later. That reservation does not consume a fallback slot. Earlier
+ * unbound agents of the same gender then take the remaining voices in order.
+ * An unbound teacher does not take a slot: discussion playback uses the
+ * narrator binding for that role, so the role check stays behind the
+ * configured-voice check.
  */
 function distinctGenderVoiceId(
   pool: Array<{ id: string }>,
@@ -259,15 +268,16 @@ function distinctGenderVoiceId(
   enabledProviders: ProviderWithVoices[],
 ): string {
   const used = new Set<string>();
+  for (const other of roster.agents) {
+    if (!other) continue;
+    const configured = resolveConfiguredAgentVoice(other, enabledProviders, roster.overrides);
+    if (configured) used.add(configured.voiceId);
+  }
   let overflow = 0;
   for (let i = 0; i < index; i++) {
     const earlier = roster.agents[i];
     if (!earlier) continue;
-    const configured = resolveConfiguredAgentVoice(earlier, enabledProviders, roster.overrides);
-    if (configured) {
-      used.add(configured.voiceId);
-      continue;
-    }
+    if (resolveConfiguredAgentVoice(earlier, enabledProviders, roster.overrides)) continue;
     if (earlier.role === 'teacher') continue;
     if (identityGender(earlier.voiceDesign?.identity) !== agentGender) continue;
     used.add(distinctVoiceId(pool, used, overflow));

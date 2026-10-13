@@ -165,11 +165,25 @@ function pickMatchingGenderVoice(
   return free[0];
 }
 
+/** True when this agent is on a male/female voice of the other gender. */
+function hasOppositeVoiceGender(
+  agent: GeneratedAgentProfile,
+  availableVoices: AdvertisedVoice[],
+): boolean {
+  if (!agent.voiceConfig) return false;
+  const wanted = identityGender(agent.voiceDesign?.identity);
+  if (!wanted) return false;
+  const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
+  if (!current || (current.gender !== 'male' && current.gender !== 'female')) return false;
+  return current.gender !== wanted;
+}
+
 /**
- * Swap a chosen voice whose catalog gender is the opposite of an identity
- * that says male or female. Same language is preferred; an unused voice of
- * the matching gender is required. Unknown and neutral genders stay. The
- * fixed narrator binding is never reassigned.
+ * Give every agent a distinct voice of their identity gender when the
+ * catalogue has one. Opposite-gender choices are released first, then
+ * reassigned in order, so a voice held by a later mismatch is available to
+ * an earlier agent. Already-matching voices, unknown and neutral genders,
+ * and the fixed narrator binding stay put and are not stolen.
  */
 function reconcileOppositeVoiceGenders(
   agents: GeneratedAgentProfile[],
@@ -177,24 +191,28 @@ function reconcileOppositeVoiceGenders(
   narratorBinding: VoiceBinding | undefined,
 ): void {
   if (!availableVoices?.length) return;
+  const reserved = narratorBinding ? advertisedVoiceToken(narratorBinding) : undefined;
+  const canMove = (agent: GeneratedAgentProfile) => {
+    if (narratorBinding && agent.role === 'teacher') return false;
+    return hasOppositeVoiceGender(agent, availableVoices);
+  };
+
+  // Agents we will not move keep their voices. Mismatched agents release
+  // theirs up front; a later swap must not be what frees the voice an
+  // earlier agent needed.
   const usage = new Map<string, number>();
   for (const agent of agents) {
-    if (!agent.voiceConfig) continue;
+    if (!agent.voiceConfig || canMove(agent)) continue;
     const key = advertisedVoiceToken(agent.voiceConfig);
     usage.set(key, (usage.get(key) ?? 0) + 1);
   }
-  const reserved = narratorBinding ? advertisedVoiceToken(narratorBinding) : undefined;
 
   for (const agent of agents) {
-    if (narratorBinding && agent.role === 'teacher') continue;
+    if (!canMove(agent) || !agent.voiceConfig) continue;
     const wanted = identityGender(agent.voiceDesign?.identity);
-    if (!wanted || !agent.voiceConfig) continue;
     const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
-    if (!current || (current.gender !== 'male' && current.gender !== 'female')) continue;
-    if (current.gender === wanted) continue;
+    if (!wanted || !current) continue;
 
-    const currentKey = advertisedVoiceToken(current);
-    usage.set(currentKey, (usage.get(currentKey) ?? 0) - 1);
     const replacement = pickMatchingGenderVoice(
       availableVoices,
       wanted,
@@ -203,6 +221,7 @@ function reconcileOppositeVoiceGenders(
       reserved,
     );
     if (!replacement) {
+      const currentKey = advertisedVoiceToken(current);
       usage.set(currentKey, (usage.get(currentKey) ?? 0) + 1);
       continue;
     }

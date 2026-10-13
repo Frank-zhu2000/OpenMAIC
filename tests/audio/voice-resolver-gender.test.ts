@@ -36,7 +36,7 @@ const gendered: ProviderWithVoices = {
   modelGroups: [],
 };
 
-/** Same order, no gender field — the catalogue cannot prefer a gender. */
+/** A two-voice catalogue with no gender field. Not the gendered list with that field removed. */
 const ungendered: ProviderWithVoices = {
   providerId: 'custom-tts-lab',
   providerName: 'Lab',
@@ -123,9 +123,12 @@ describe('resolveAgentVoice gender fallback', () => {
   });
 
   it('keeps the index pick when the identity does not say male or female', () => {
-    expect(
-      resolveAgentVoice(withIdentity('professora de meia-idade'), 0, [gendered])?.voiceId,
-    ).toBe('lead-male');
+    const localized = withIdentity('professora de meia-idade');
+    // Index 0 of the full list is male. Index 1 is female. A bug that treats
+    // every identity without the word "female" as male still returns lead-male
+    // at index 1, because the male subset has a single voice.
+    expect(resolveAgentVoice(localized, 0, [gendered])?.voiceId).toBe('lead-male');
+    expect(resolveAgentVoice(localized, 1, [gendered])?.voiceId).toBe('lead-female');
   });
 
   it('uses MiniMax catalog gender from the enabled provider list, not the index', () => {
@@ -220,5 +223,57 @@ describe('resolveAgentVoice gender fallback', () => {
     expect(voices[1]).toBe('nova');
     expect(voices[3]).toBe('shimmer');
     expect(new Set([voices[0], voices[2]]).size).toBe(2);
+  });
+
+  it('reserves a configured voice that appears later in the roster', () => {
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+    });
+    expect(
+      providers[0].voices.filter((voice) => voice.gender === 'female').map((voice) => voice.id),
+    ).toEqual(['nova', 'shimmer']);
+    const student = agent({
+      role: 'student',
+      voiceDesign: { identity: 'young female student', texture: 'warm', delivery: 'calm' },
+    });
+    const teacher = agent({
+      role: 'teacher',
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+      voiceConfig: { providerId: 'openai-tts', voiceId: 'nova' },
+    });
+    const roster = [student, teacher];
+    // The teacher speaks nova. shimmer is free, so the earlier unbound student must not take nova.
+    expect(resolveAgentVoice(student, 0, providers, undefined, { roster })?.voiceId).toBe(
+      'shimmer',
+    );
+    expect(resolveAgentVoice(teacher, 1, providers, undefined, { roster })?.voiceId).toBe('nova');
+  });
+
+  it('does not assign a later configured voice when every same-gender voice is already taken', () => {
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+    });
+    const teacher = agent({
+      role: 'teacher',
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+      voiceConfig: { providerId: 'openai-tts', voiceId: 'nova' },
+    });
+    const unbound = agent({
+      role: 'student',
+      voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+    });
+    const later = agent({
+      role: 'student',
+      voiceDesign: { identity: 'young female student', texture: 'light', delivery: 'lively' },
+      voiceConfig: { providerId: 'openai-tts', voiceId: 'shimmer' },
+    });
+    const roster = [teacher, unbound, later];
+    const voices = roster.map(
+      (entry, index) => resolveAgentVoice(entry, index, providers, undefined, { roster })?.voiceId,
+    );
+    expect(voices[0]).toBe('nova');
+    expect(voices[2]).toBe('shimmer');
+    // Both female voices are configured, so the unbound agent wraps inside that subset.
+    expect(voices[1]).toBe('nova');
   });
 });

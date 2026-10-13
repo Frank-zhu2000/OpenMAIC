@@ -179,11 +179,12 @@ function hasOppositeVoiceGender(
 }
 
 /**
- * Give every agent a distinct voice of their identity gender when the
- * catalogue has one. Opposite-gender choices are released first, then
- * reassigned in order, so a voice held by a later mismatch is available to
- * an earlier agent. Already-matching voices, unknown and neutral genders,
- * and the fixed narrator binding stay put and are not stolen.
+ * Move agents off an opposite male or female voice when the catalogue has a
+ * free voice of their identity gender. Already-matching voices, unknown and
+ * neutral genders, and the fixed narrator binding stay put and are not stolen.
+ * A failed move keeps the current voice and does not mark it used, so another
+ * agent can still take it. Two agents share a voice only when no free match
+ * remains.
  */
 function reconcileOppositeVoiceGenders(
   agents: GeneratedAgentProfile[],
@@ -207,31 +208,34 @@ function reconcileOppositeVoiceGenders(
     usage.set(key, (usage.get(key) ?? 0) + 1);
   }
 
-  for (const agent of agents) {
-    if (!canMove(agent) || !agent.voiceConfig) continue;
-    const wanted = identityGender(agent.voiceDesign?.identity);
-    const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
-    if (!wanted || !current) continue;
+  // A miss does not put the old voice back into `usage`, so another agent
+  // can still take it. Repeat until a pass moves nobody.
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const agent of agents) {
+      if (!canMove(agent) || !agent.voiceConfig) continue;
+      const wanted = identityGender(agent.voiceDesign?.identity);
+      const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
+      if (!wanted || !current) continue;
 
-    const replacement = pickMatchingGenderVoice(
-      availableVoices,
-      wanted,
-      current.voiceLanguage,
-      usage,
-      reserved,
-    );
-    if (!replacement) {
-      const currentKey = advertisedVoiceToken(current);
-      usage.set(currentKey, (usage.get(currentKey) ?? 0) + 1);
-      continue;
+      const replacement = pickMatchingGenderVoice(
+        availableVoices,
+        wanted,
+        current.voiceLanguage,
+        usage,
+        reserved,
+      );
+      if (!replacement) continue;
+      agent.voiceConfig = {
+        providerId: replacement.providerId,
+        ...(replacement.modelId ? { modelId: replacement.modelId } : {}),
+        voiceId: replacement.voiceId,
+      };
+      const replacementKey = advertisedVoiceToken(replacement);
+      usage.set(replacementKey, (usage.get(replacementKey) ?? 0) + 1);
+      progressed = true;
     }
-    agent.voiceConfig = {
-      providerId: replacement.providerId,
-      ...(replacement.modelId ? { modelId: replacement.modelId } : {}),
-      voiceId: replacement.voiceId,
-    };
-    const replacementKey = advertisedVoiceToken(replacement);
-    usage.set(replacementKey, (usage.get(replacementKey) ?? 0) + 1);
   }
 }
 

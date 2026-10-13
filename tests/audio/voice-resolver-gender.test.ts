@@ -276,4 +276,61 @@ describe('resolveAgentVoice gender fallback', () => {
     // Both female voices are configured, so the unbound agent wraps inside that subset.
     expect(voices[1]).toBe('nova');
   });
+
+  it('reserves the provider default an unbound teacher actually speaks', () => {
+    const providers = getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+    const females = providers[0].voices
+      .filter((voice) => voice.gender === 'female')
+      .map((voice) => voice.id);
+    // MiniMax's provider default is the first female voice. Discussion plays
+    // that for a teacher with no voiceConfig; the student must take the next one.
+    expect(females[0]).toBe('female-yujie');
+    expect(females).toContain('female-shaonv');
+    const student = agent({
+      role: 'student',
+      voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+    });
+    const teacher = agent({
+      role: 'teacher',
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+    });
+    expect(teacher.voiceConfig).toBeUndefined();
+    const roster = [student, teacher];
+    expect(resolveAgentVoice(student, 0, providers, undefined, { roster })?.voiceId).toBe(
+      'female-shaonv',
+    );
+    const teacherFirst = [teacher, student];
+    expect(
+      resolveAgentVoice(student, 1, providers, undefined, { roster: teacherFirst })?.voiceId,
+    ).toBe('female-shaonv');
+  });
+
+  it('does not spend a fallback slot on an unbound teacher without voiceConfig', () => {
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+    });
+    expect(
+      providers[0].voices.filter((voice) => voice.gender === 'female').map((voice) => voice.id),
+    ).toEqual(['nova', 'shimmer']);
+    const student = (texture: string) =>
+      agent({
+        role: 'student',
+        voiceDesign: { identity: 'young female student', texture, delivery: 'calm' },
+      });
+    const teacher = agent({
+      role: 'teacher',
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+    });
+    expect(teacher.voiceConfig).toBeUndefined();
+    // alloy, the OpenAI default, is neutral, so it sits outside this pool.
+    // Counting the teacher as a fallback would wrap the second student onto nova.
+    const roster = [student('bright'), teacher, student('light')];
+    const voices = roster.map(
+      (entry, index) => resolveAgentVoice(entry, index, providers, undefined, { roster })?.voiceId,
+    );
+    expect(voices[0]).toBe('nova');
+    expect(voices[2]).toBe('shimmer');
+  });
 });

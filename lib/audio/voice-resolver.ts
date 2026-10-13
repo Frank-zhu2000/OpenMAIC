@@ -5,6 +5,7 @@ import {
   isQwenCatalogVoice,
   isQwenCloneVoice,
   isQwenVoiceCloneModel,
+  DEFAULT_TTS_VOICES,
   resolveTTSModelForVoice,
   TTS_PROVIDERS,
   voiceServesModel,
@@ -78,9 +79,9 @@ export function resolveNarratorVoiceBinding(
 export interface ResolveAgentVoiceOptions {
   /**
    * Agents in the same order as `agentIndex`. When present, a male/female
-   * fallback uses a per-gender ordinal and skips every configured voice in
-   * the roster, plus earlier same-gender fallbacks, instead of `agentIndex`
-   * modulo the gender subset. Omit it to keep the index pick.
+   * fallback uses a per-gender ordinal and skips every voice the roster will
+   * actually speak: configured voices, an unbound teacher's provider default,
+   * and earlier same-gender fallbacks. Omit it to keep the index pick.
    */
   roster?: AgentConfig[];
 }
@@ -96,8 +97,9 @@ export interface ResolveAgentVoiceOptions {
  * 2. Otherwise, deterministically pick the first enabled provider. When the
  *    catalogue lists the agent's gender, the pick stays in that male or female
  *    subset. With a roster, that subset uses a per-gender ordinal and skips
- *    every configured voice in the roster, not only earlier ones. Without a
- *    roster, or when that subset is empty (no gender data, or only neutral),
+ *    every voice the roster will actually speak, including a later configured
+ *    voice and an unbound teacher's provider default. Without a roster, or
+ *    when that subset is empty (no gender on those voices, or only neutral),
  *    the pick is `agentIndex` modulo the pool. Browser-native is in the pool
  *    only when the caller included it: getEnabledProvidersWithVoices excludes
  *    it, getSelectableProvidersWithVoices appends it LAST, so it is the index
@@ -126,8 +128,11 @@ export function resolveAgentVoice(
 }
 
 /**
- * A stored or overridden voice, when that provider is enabled and the voice is
- * known. Null when the agent must take the deterministic fallback.
+ * A stored or overridden voice whose provider is enabled. Browser-native is
+ * accepted when that provider is in the enabled list (its voices are dynamic).
+ * Qwen accepts a catalog voice or any non-empty id, including a clone that is
+ * not in the static list. Other providers must name a voice the enabled model
+ * offers. Null when the agent must take the deterministic fallback.
  */
 function resolveConfiguredAgentVoice(
   agent: AgentConfig,
@@ -213,8 +218,8 @@ function identityGender(identity: string | undefined): 'male' | 'female' | undef
  * voices. Neutral voices are not male or female, so a neutral-only catalogue
  * keeps the index pick, the same as a catalogue with no gender data. With a
  * roster, the gendered subset uses a per-gender ordinal and skips every
- * configured voice in the roster, plus earlier same-gender fallbacks, instead
- * of `index` modulo that subset. Returns null when no
+ * voice the roster will actually speak, plus earlier same-gender fallbacks,
+ * instead of `index` modulo that subset. Returns null when no
  * enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
@@ -252,13 +257,26 @@ function distinctVoiceId(pool: Array<{ id: string }>, used: Set<string>, overflo
 }
 
 /**
- * Voice for one unbound agent of `agentGender`. Every configured voice in the
- * roster is reserved first, including a teacher's usable voiceConfig and voices
- * that appear later. That reservation does not consume a fallback slot. Earlier
- * unbound agents of the same gender then take the remaining voices in order.
- * An unbound teacher does not take a slot: discussion playback uses the
- * narrator binding for that role, so the role check stays behind the
- * configured-voice check.
+ * The voice discussion plays for an unbound teacher: the provider default
+ * (`resolveNarratorVoiceBinding` with no usable voiceConfig). When the enabled
+ * model cannot speak that id, playback uses the first voice it offers.
+ * Undefined for a provider with no built-in default.
+ */
+function providerDefaultVoiceId(provider: ProviderWithVoices | undefined): string | undefined {
+  if (!provider) return undefined;
+  const preferred = (DEFAULT_TTS_VOICES as Record<string, string>)[provider.providerId];
+  if (!preferred) return undefined;
+  if (provider.voices.some((voice) => voice.id === preferred)) return preferred;
+  return provider.voices[0]?.id;
+}
+
+/**
+ * Voice for one unbound agent of `agentGender`. Reserve every voice the roster
+ * will actually speak before allocating fallbacks: a configured voice (including
+ * one that appears later) and, for an unbound teacher, the provider default.
+ * That reservation does not consume a fallback slot. Earlier unbound agents of
+ * the same gender then take the remaining voices. An unbound teacher does not
+ * take a slot, because discussion playback does not speak this fallback for them.
  */
 function distinctGenderVoiceId(
   pool: Array<{ id: string }>,
@@ -268,10 +286,15 @@ function distinctGenderVoiceId(
   enabledProviders: ProviderWithVoices[],
 ): string {
   const used = new Set<string>();
+  const teacherDefault = providerDefaultVoiceId(enabledProviders[0]);
   for (const other of roster.agents) {
     if (!other) continue;
     const configured = resolveConfiguredAgentVoice(other, enabledProviders, roster.overrides);
-    if (configured) used.add(configured.voiceId);
+    if (configured) {
+      used.add(configured.voiceId);
+      continue;
+    }
+    if (other.role === 'teacher' && teacherDefault) used.add(teacherDefault);
   }
   let overflow = 0;
   for (let i = 0; i < index; i++) {
@@ -395,7 +418,11 @@ export interface ProviderWithVoices {
     id: string;
     name: string;
     language?: string;
-    /** Present when the catalogue lists one. Absent means the catalogue has no gender. */
+    /**
+     * This voice's catalogue gender, when the provider lists one. Clones and
+     * custom voices omit it even beside gendered presets. `neutral` is an
+     * explicit value, not a missing field.
+     */
     gender?: 'male' | 'female' | 'neutral';
   }>;
   modelGroups: ModelVoiceGroup[]; // voices grouped by model

@@ -618,4 +618,92 @@ describe('agent profiles — voice gender', () => {
       'onyx',
     ]);
   });
+
+  it('does not give an earlier mismatch a voice a later agent already matches', async () => {
+    const agents = await generate(
+      [
+        profile({
+          name: 'Ana',
+          role: 'student',
+          voice: openaiToken('echo'),
+          voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+        }),
+        profile({
+          name: 'Lin',
+          role: 'teacher',
+          voice: openaiToken('nova'),
+          voiceDesign: {
+            identity: 'middle-aged female teacher',
+            texture: 'warm',
+            delivery: 'calm',
+          },
+        }),
+        profile({
+          name: 'Sam',
+          role: 'student',
+          voice: openaiToken('shimmer'),
+          voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+        }),
+      ],
+      { availableVoices: OPENAI_VOICES },
+    );
+
+    // Lin already matches nova. Ana's first female voice would be nova if that
+    // hold were dropped, even though Sam is about to release shimmer.
+    expect(agents.map((entry) => entry.voiceConfig?.voiceId)).toEqual(['shimmer', 'nova', 'echo']);
+  });
+
+  it('leaves a failed move unlocked so a later agent can take that voice', async () => {
+    const echoNova: NonNullable<AgentProfilesInput['availableVoices']> = [
+      {
+        providerId: 'openai-tts',
+        voiceId: 'echo',
+        voiceName: 'Echo',
+        voiceLanguage: 'en',
+        gender: 'male',
+      },
+      {
+        providerId: 'openai-tts',
+        voiceId: 'nova',
+        voiceName: 'Nova',
+        voiceLanguage: 'en',
+        gender: 'female',
+      },
+    ];
+    const femaleOnEcho = profile({
+      name: 'Ana',
+      role: 'student',
+      voice: openaiToken('echo'),
+      voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+    });
+    const maleOnNova = profile({
+      name: 'Sam',
+      role: 'student',
+      voice: openaiToken('nova'),
+      voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+    });
+    const teacher = profile({
+      name: 'Lin',
+      role: 'teacher',
+      voiceDesign: {
+        identity: 'middle-aged female teacher',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const assign = (students: unknown[]) =>
+      generate([teacher, ...students], {
+        availableVoices: echoNova,
+        narratorVoice: { providerId: 'openai-tts', voiceId: 'nova' },
+      });
+
+    // nova is the narrator, so Ana cannot leave echo. Re-locking echo on that
+    // failure leaves Sam on nova. He must take echo; the two then share it.
+    expect(
+      (await assign([femaleOnEcho, maleOnNova])).map((entry) => entry.voiceConfig?.voiceId),
+    ).toEqual(['nova', 'echo', 'echo']);
+    expect(
+      (await assign([maleOnNova, femaleOnEcho])).map((entry) => entry.voiceConfig?.voiceId),
+    ).toEqual(['nova', 'echo', 'echo']);
+  });
 });

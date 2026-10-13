@@ -910,7 +910,7 @@ describe('PPT element reference Route → Director → real call_agent L2', () =
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({
         errorCode: 'INVALID_REQUEST',
-        error: 'storeState.scenes must not contain empty members',
+        error: 'storeState.scenes members must be objects',
       });
       expect(response.headers.has('X-OpenMAIC-Element-Reference-Accepted')).toBe(false);
       expect(mocks.resolveModel).not.toHaveBeenCalled();
@@ -919,16 +919,28 @@ describe('PPT element reference Route → Director → real call_agent L2', () =
     },
   );
 
-  it('still accepts a slide reference whose scenes contain a non-object member', async () => {
-    installAgentShell('Mock projection answer.');
-    const body = makeBody();
-    (body.storeState.scenes as unknown[]).push(7);
-    const { POST } = await import('@/app/api/chat/pi/route');
-    const response = await POST(makeRequest(body));
-    expect(response.status).toBe(200);
-    expect(response.headers.get('X-OpenMAIC-Element-Reference-Accepted')).toBe('1');
-    await response.text();
-  });
+  it.each([
+    ['a primitive', 7],
+    ['a string', 'scene-x'],
+    ['an array', []],
+  ] as const)(
+    'rejects a slide reference whose scenes contain %s member with 400 before any model call',
+    async (_label, member) => {
+      const body = makeBody();
+      (body.storeState.scenes as unknown[]).push(member);
+      const { POST } = await import('@/app/api/chat/pi/route');
+      const response = await POST(makeRequest(body));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        errorCode: 'INVALID_REQUEST',
+        error: 'storeState.scenes members must be objects',
+      });
+      expect(response.headers.has('X-OpenMAIC-Element-Reference-Accepted')).toBe(false);
+      expect(mocks.resolveModel).not.toHaveBeenCalled();
+      expect(mocks.buildAgent).not.toHaveBeenCalled();
+      expect(mocks.streamLLM).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not relabel unexpected resolver exceptions as invalid snapshot errors', async () => {
     const references = await import('@/lib/chat/pi/element-reference');

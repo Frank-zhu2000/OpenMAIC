@@ -768,4 +768,89 @@ describe('agent profiles — voice gender', () => {
       (await assign([maleOnNova, femaleOnEcho])).map((entry) => entry.voiceConfig?.voiceId),
     ).toEqual(['nova', 'onyx', 'echo']);
   });
+
+  it('prefers a same-language voice a mismatched agent will release over a free other-language voice', async () => {
+    // Azure catalogue order: zh female, zh male, zh female, zh male, en female, en male.
+    const azureVoices: NonNullable<AgentProfilesInput['availableVoices']> = [
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-XiaoxiaoNeural',
+        voiceName: '晓晓 (女)',
+        voiceLanguage: 'zh-CN',
+        gender: 'female',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-YunxiNeural',
+        voiceName: '云希 (男)',
+        voiceLanguage: 'zh-CN',
+        gender: 'male',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-XiaoyiNeural',
+        voiceName: '晓伊 (女)',
+        voiceLanguage: 'zh-CN',
+        gender: 'female',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-YunjianNeural',
+        voiceName: '云健 (男)',
+        voiceLanguage: 'zh-CN',
+        gender: 'male',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'en-US-JennyNeural',
+        voiceName: 'Jenny',
+        voiceLanguage: 'en-US',
+        gender: 'female',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'en-US-GuyNeural',
+        voiceName: 'Guy',
+        voiceLanguage: 'en-US',
+        gender: 'male',
+      },
+    ];
+    const azureToken = (voiceId: string) => `azure-tts::${voiceId}`;
+    const femaleOnYunxi = profile({
+      name: 'Ana',
+      role: 'student',
+      voice: azureToken('zh-CN-YunxiNeural'),
+      voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+    });
+    const maleOnXiaoyi = profile({
+      name: 'Sam',
+      role: 'student',
+      voice: azureToken('zh-CN-XiaoyiNeural'),
+      voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+    });
+    const teacher = profile({
+      name: 'Lin',
+      role: 'teacher',
+      voiceDesign: {
+        identity: 'middle-aged female teacher',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const assign = (students: unknown[]) =>
+      generate([teacher, ...students], {
+        availableVoices: azureVoices,
+        narratorVoice: { providerId: 'azure-tts', voiceId: 'zh-CN-XiaoxiaoNeural' },
+      });
+
+    // Narrator keeps 晓晓. Ana is on 云希 and Sam is on 晓伊, so each holds the voice the
+    // other needs. 晓伊 is the same language and Sam will leave it; Jenny is free but
+    // en-US. Female-then-male must stay on Chinese voices, and so must the reverse.
+    expect(
+      (await assign([femaleOnYunxi, maleOnXiaoyi])).map((entry) => entry.voiceConfig?.voiceId),
+    ).toEqual(['zh-CN-XiaoxiaoNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunxiNeural']);
+    expect(
+      (await assign([maleOnXiaoyi, femaleOnYunxi])).map((entry) => entry.voiceConfig?.voiceId),
+    ).toEqual(['zh-CN-XiaoxiaoNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaoyiNeural']);
+  });
 });

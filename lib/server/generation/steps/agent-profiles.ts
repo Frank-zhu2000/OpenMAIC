@@ -152,6 +152,7 @@ function pickMatchingGenderVoice(
   usage: Map<string, number>,
   reserved: string | undefined,
   occupied: Set<string>,
+  stuck: Set<string>,
 ): AdvertisedVoice | undefined {
   const matches = voices.filter((voice) => {
     if (voice.gender !== wanted) return false;
@@ -159,17 +160,29 @@ function pickMatchingGenderVoice(
     if (reserved !== undefined && key === reserved) return false;
     return (usage.get(key) ?? 0) <= 0;
   });
-  const choose = (pool: AdvertisedVoice[]): AdvertisedVoice | undefined => {
-    if (preferredLanguage) {
-      const sameLanguage = pool.find((voice) => voice.voiceLanguage === preferredLanguage);
-      if (sameLanguage) return sameLanguage;
-    }
-    return pool[0];
+  // Same language and nobody holds it, then same language held only by an
+  // agent who will still move, then another language nobody holds, then any
+  // other unused match. Stuck means a holder will not leave (failed move,
+  // narrator, or already matching).
+  const rank = (voice: AdvertisedVoice): number => {
+    const key = advertisedVoiceToken(voice);
+    const sameLanguage = !preferredLanguage || voice.voiceLanguage === preferredLanguage;
+    const held = occupied.has(key);
+    if (sameLanguage && !held) return 0;
+    if (sameLanguage && held && !stuck.has(key)) return 1;
+    if (!held) return 2;
+    return 3;
   };
-  // A failed move leaves the old voice at usage 0 while that agent still
-  // speaks it. Take such a voice only when every unoccupied match is gone.
-  const unoccupied = matches.filter((voice) => !occupied.has(advertisedVoiceToken(voice)));
-  return choose(unoccupied) ?? choose(matches);
+  let best: AdvertisedVoice | undefined;
+  let bestRank = 4;
+  for (const voice of matches) {
+    const voiceRank = rank(voice);
+    if (voiceRank < bestRank) {
+      best = voice;
+      bestRank = voiceRank;
+    }
+  }
+  return best;
 }
 
 /** True when this agent is on a male/female voice of the other gender. */
@@ -190,8 +203,10 @@ function hasOppositeVoiceGender(
  * free voice of their identity gender. Already-matching voices, unknown and
  * neutral genders, and the fixed narrator binding stay put and are not stolen.
  * A failed move keeps the current voice and does not mark it used. Prefer a
- * voice nobody still holds, and take that voice only when no unoccupied
- * same-gender match remains.
+ * same-language voice nobody holds, then a same-language voice held only by
+ * an agent who is still mismatched, then an other-language voice nobody
+ * holds, then any other unused match. A voice is stuck when its holder will
+ * not leave.
  */
 function reconcileOppositeVoiceGenders(
   agents: GeneratedAgentProfile[],
@@ -215,12 +230,13 @@ function reconcileOppositeVoiceGenders(
     usage.set(key, (usage.get(key) ?? 0) + 1);
   }
 
-  // A miss does not put the old voice back into `usage`. The next agent
-  // prefers a voice nobody still holds, and takes this one only when no
-  // unoccupied match remains. Repeat until a pass moves nobody.
+  // A miss does not put the old voice back into `usage`. That holder will
+  // not leave, so later picks in this pass treat the voice as stuck. Repeat
+  // until a pass moves nobody.
   let progressed = true;
   while (progressed) {
     progressed = false;
+    const gaveUp = new Set<GeneratedAgentProfile>();
     for (const agent of agents) {
       if (!canMove(agent) || !agent.voiceConfig) continue;
       const wanted = identityGender(agent.voiceDesign?.identity);
@@ -228,8 +244,12 @@ function reconcileOppositeVoiceGenders(
       if (!wanted || !current) continue;
 
       const occupied = new Set<string>();
+      const stuck = new Set<string>();
       for (const holder of agents) {
-        if (holder.voiceConfig) occupied.add(advertisedVoiceToken(holder.voiceConfig));
+        if (!holder.voiceConfig) continue;
+        const key = advertisedVoiceToken(holder.voiceConfig);
+        occupied.add(key);
+        if (!canMove(holder) || gaveUp.has(holder)) stuck.add(key);
       }
       const replacement = pickMatchingGenderVoice(
         availableVoices,
@@ -238,8 +258,12 @@ function reconcileOppositeVoiceGenders(
         usage,
         reserved,
         occupied,
+        stuck,
       );
-      if (!replacement) continue;
+      if (!replacement) {
+        gaveUp.add(agent);
+        continue;
+      }
       agent.voiceConfig = {
         providerId: replacement.providerId,
         ...(replacement.modelId ? { modelId: replacement.modelId } : {}),

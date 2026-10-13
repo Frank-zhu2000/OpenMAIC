@@ -219,10 +219,11 @@ function identityGender(identity: string | undefined): 'male' | 'female' | undef
  * female and the catalogue lists that gender, the pick stays inside those
  * voices. Neutral voices are not male or female, so a neutral-only catalogue
  * keeps the index pick, the same as a catalogue with no gender data. With a
- * roster, the gendered subset uses a per-gender ordinal and skips every
- * voice the roster will actually speak, plus earlier same-gender fallbacks,
- * instead of `index` modulo that subset. Returns null when no
- * enabled provider can serve a voice.
+ * roster, the gendered subset uses a per-gender ordinal and skips configured
+ * voice ids, the unbound-teacher catalogue default, and earlier same-gender
+ * fallbacks, instead of `index` modulo that subset. A custom global lecture
+ * voice is not reserved. Returns null when no enabled provider can serve a
+ * voice.
  */
 export function resolveDeterministicFallbackVoice(
   enabledProviders: ProviderWithVoices[],

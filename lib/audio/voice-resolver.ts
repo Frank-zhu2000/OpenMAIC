@@ -74,6 +74,16 @@ export function resolveNarratorVoiceBinding(
   };
 }
 
+/** Roster passed when several agents are resolved together. */
+export interface ResolveAgentVoiceOptions {
+  /**
+   * Agents in the same order as `agentIndex`. When present, a male/female
+   * fallback uses a per-gender ordinal and skips voices already taken, instead
+   * of `agentIndex` modulo the gender subset. Omit it to keep the index pick.
+   */
+  roster?: AgentConfig[];
+}
+
 /**
  * Resolve the TTS provider + voice for an agent, choosing only among ENABLED
  * providers (`enabledProviders` is the output of getEnabledProvidersWithVoices,
@@ -93,6 +103,29 @@ export function resolveNarratorVoiceBinding(
 export function resolveAgentVoice(
   agent: AgentConfig,
   agentIndex: number,
+  enabledProviders: ProviderWithVoices[],
+  overrides?: AgentVoiceOverrides,
+  options?: ResolveAgentVoiceOptions,
+): ResolvedVoice | null {
+  const configured = resolveConfiguredAgentVoice(agent, enabledProviders, overrides);
+  if (configured) return configured;
+
+  // Fallback: same-gender catalog voice when the catalogue has one, else index.
+  // Neutral-only catalogues have no male/female subset, so they stay on the index.
+  return resolveDeterministicFallbackVoice(
+    enabledProviders,
+    agentIndex,
+    identityGender(agent.voiceDesign?.identity),
+    options?.roster ? { agents: options.roster, overrides } : undefined,
+  );
+}
+
+/**
+ * A stored or overridden voice, when that provider is enabled and the voice is
+ * known. Null when the agent must take the deterministic fallback.
+ */
+function resolveConfiguredAgentVoice(
+  agent: AgentConfig,
   enabledProviders: ProviderWithVoices[],
   overrides?: AgentVoiceOverrides,
 ): ResolvedVoice | null {
@@ -154,12 +187,7 @@ export function resolveAgentVoice(
     }
   }
 
-  // Fallback: same-gender catalog voice when the catalogue has one, else index.
-  return resolveDeterministicFallbackVoice(
-    enabledProviders,
-    agentIndex,
-    identityGender(agent.voiceDesign?.identity),
-  );
+  return null;
 }
 
 /** English male/female in voiceDesign.identity. A localized identity has neither word. */
@@ -177,14 +205,17 @@ function identityGender(identity: string | undefined): 'male' | 'female' | undef
  * of its catalog voices (Qwen clones are excluded — only catalog voices are
  * guaranteed usable without account state). When `agentGender` is male or
  * female and the catalogue lists that gender, the pick stays inside those
- * voices and still uses `index`. A catalogue with no gender data, or with no
- * voice of that gender, keeps the index pick over the full list. Returns null
- * when no enabled provider can serve a voice.
+ * voices. Neutral voices are not male or female, so a neutral-only catalogue
+ * keeps the index pick, the same as a catalogue with no gender data. With a
+ * roster, the gendered subset uses a per-gender ordinal and skips voices
+ * already taken, instead of `index` modulo that subset. Returns null when no
+ * enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
   enabledProviders: ProviderWithVoices[],
   index: number,
   agentGender?: 'male' | 'female',
+  roster?: { agents: AgentConfig[]; overrides?: AgentVoiceOverrides },
 ): ResolvedVoice | null {
   if (enabledProviders.length === 0) return null;
   const first = enabledProviders[0];
@@ -197,10 +228,52 @@ export function resolveDeterministicFallbackVoice(
     ? fallbackVoices.filter((voice) => voice.gender === agentGender)
     : [];
   const pool = sameGender.length > 0 ? sameGender : fallbackVoices;
+  const voiceId =
+    roster && agentGender && sameGender.length > 0
+      ? distinctGenderVoiceId(pool, roster, index, agentGender, enabledProviders)
+      : pool[index % pool.length].id;
   return {
     providerId: first.providerId,
-    voiceId: pool[index % pool.length].id,
+    voiceId,
   };
+}
+
+/** Next unused voice in `pool`, or a stable wrap once every matching voice is taken. */
+function distinctVoiceId(pool: Array<{ id: string }>, used: Set<string>, overflow: number): string {
+  const free = pool.filter((voice) => !used.has(voice.id));
+  if (free.length > 0) return free[0].id;
+  return pool[overflow % pool.length].id;
+}
+
+/**
+ * Voice for one unbound agent of `agentGender`. Earlier same-gender fallbacks
+ * consume distinct voices; a configured voice is reserved but does not consume
+ * a fallback slot. The teacher is skipped: discussion playback uses the
+ * narrator binding for that role.
+ */
+function distinctGenderVoiceId(
+  pool: Array<{ id: string }>,
+  roster: { agents: AgentConfig[]; overrides?: AgentVoiceOverrides },
+  index: number,
+  agentGender: 'male' | 'female',
+  enabledProviders: ProviderWithVoices[],
+): string {
+  const used = new Set<string>();
+  let overflow = 0;
+  for (let i = 0; i < index; i++) {
+    const earlier = roster.agents[i];
+    if (!earlier) continue;
+    const configured = resolveConfiguredAgentVoice(earlier, enabledProviders, roster.overrides);
+    if (configured) {
+      used.add(configured.voiceId);
+      continue;
+    }
+    if (earlier.role === 'teacher') continue;
+    if (identityGender(earlier.voiceDesign?.identity) !== agentGender) continue;
+    used.add(distinctVoiceId(pool, used, overflow));
+    overflow += 1;
+  }
+  return distinctVoiceId(pool, used, overflow);
 }
 
 /** Whether a narrator binding names a voice other than the global one. */

@@ -257,6 +257,19 @@ export async function generateAgentProfiles(
   const systemPrompt = `You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Decide the appropriate number of agents (typically 3-5) based on the course content and complexity. Return ONLY valid JSON, no markdown or explanation.`;
 
   // Build voice list for prompt (if available)
+  const binaryGenderListed = availableVoices?.some(
+    (voice) => voice.gender === 'male' || voice.gender === 'female',
+  );
+  // Neutral-only catalogues (google-tts, VoxCPM voxcpm:auto) have nothing to
+  // match. Asking the model to align identity, name, and persona would collapse
+  // them onto "neutral".
+  const genderMatchRules = binaryGenderListed
+    ? `  - The voice's gender must match the agent's voiceDesign.identity
+  - Keep the agent's name and persona consistent with that gender
+  - Only a voice labeled male or female takes part in that match. A neutral voice, or a voice with no gender, is not mismatched and must not change the agent's name, persona, or identity
+`
+    : '';
+
   const voiceListStr =
     availableVoices && availableVoices.length > 0
       ? JSON.stringify(
@@ -275,16 +288,12 @@ export async function generateAgentProfiles(
   - Every OTHER agent must still be assigned a voice from this list: ${voiceListStr}
   - Prefer a voice whose language matches the course language directive
   - Pick a voice that suits each agent's personality and role (e.g. lively voice for energetic student)
-  - The voice's gender must match the agent's voiceDesign.identity
-  - Keep the agent's name and persona consistent with that gender
-  - Try to use different voices for each non-teacher agent
+${genderMatchRules}  - Try to use different voices for each non-teacher agent
   - Never assign the fixed teacher narrator voice to any other agent`
       : `- Each agent should be assigned a voice that matches their persona from this list: ${voiceListStr}
   - Prefer a voice whose language matches the course language directive
   - Pick a voice that suits the agent's personality and role (e.g. authoritative voice for teacher, lively voice for energetic student)
-  - The voice's gender must match the agent's voiceDesign.identity
-  - Keep the agent's name and persona consistent with that gender
-  - Try to use different voices for each agent`
+${genderMatchRules}  - Try to use different voices for each agent`
     : '';
 
   // The schema example must always be an ADVERTISED token (findAdvertisedVoice

@@ -382,4 +382,112 @@ describe('agent profiles — voice gender', () => {
       voiceId: 'English_Graceful_Lady',
     });
   });
+
+  it('does not gender-match a catalogue of only neutral voices', async () => {
+    const googleTarget: RunNarrationTarget = {
+      connection: {
+        providerId: 'google-tts',
+        managed: true,
+        userEndpoint: false,
+        origin: 'configuration',
+      } as MediaConnection,
+      providerId: 'google-tts',
+    };
+    const voxTarget: RunNarrationTarget = {
+      connection: {
+        providerId: 'voxcpm-tts',
+        managed: true,
+        userEndpoint: false,
+        origin: 'configuration',
+      } as MediaConnection,
+      providerId: 'voxcpm-tts',
+    };
+    const googleVoices = advertisedVoices(googleTarget);
+    const voxVoices = advertisedVoices(voxTarget);
+    expect(googleVoices.length).toBeGreaterThan(1);
+    expect(googleVoices.every((voice) => voice.gender === 'neutral')).toBe(true);
+    expect(voxVoices.map((voice) => voice.voiceId)).toEqual(['voxcpm:auto']);
+    expect(voxVoices[0]?.gender).toBe('neutral');
+
+    const match = "The voice's gender must match the agent's voiceDesign.identity";
+    const persona = "Keep the agent's name and persona consistent with that gender";
+
+    const googleAgents = await generate(
+      [
+        profile({
+          name: 'Lin',
+          role: 'teacher',
+          voice: `google-tts::${googleVoices[0].voiceId}`,
+          voiceDesign: {
+            identity: 'middle-aged female teacher',
+            texture: 'warm',
+            delivery: 'calm',
+          },
+        }),
+        profile({
+          name: 'Sam',
+          role: 'student',
+          voice: `google-tts::${googleVoices[1].voiceId}`,
+          voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+        }),
+      ],
+      { availableVoices: googleVoices },
+    );
+    const googlePrompt = callLLM.mock.calls.at(-1)?.[0].prompt as string;
+    expect(googlePrompt).not.toContain(match);
+    expect(googlePrompt).not.toContain(persona);
+    expect(googlePrompt).toContain('"gender":"neutral"');
+    expect(googleAgents[0].voiceConfig).toEqual({
+      providerId: 'google-tts',
+      voiceId: googleVoices[0].voiceId,
+    });
+    expect(googleAgents[1].voiceConfig).toEqual({
+      providerId: 'google-tts',
+      voiceId: googleVoices[1].voiceId,
+    });
+
+    await generate(
+      [
+        profile({
+          name: 'Lin',
+          role: 'teacher',
+          voiceDesign: {
+            identity: 'middle-aged female teacher',
+            texture: 'warm',
+            delivery: 'calm',
+          },
+        }),
+        profile({
+          name: 'Sam',
+          role: 'student',
+          voice: 'voxcpm-tts::voxcpm:auto',
+          voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+        }),
+      ],
+      {
+        availableVoices: voxVoices,
+        narratorVoice: { providerId: 'voxcpm-tts', voiceId: 'voxcpm:auto' },
+      },
+    );
+    const voxPrompt = callLLM.mock.calls.at(-1)?.[0].prompt as string;
+    expect(voxPrompt).not.toContain(match);
+    expect(voxPrompt).not.toContain(persona);
+    expect(voxPrompt).toContain('voxcpm:auto');
+    expect(voxPrompt).toContain('"gender":"neutral"');
+  });
+
+  it('scopes gender matching to male and female voices when the catalogue is mixed', async () => {
+    await generate([
+      profile({ name: 'Lin', role: 'teacher', voice: token('male-qn-jingying') }),
+      profile({
+        name: 'Sam',
+        role: 'student',
+        voice: token('English_expressive_narrator'),
+        voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+      }),
+    ]);
+    const prompt = callLLM.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain("The voice's gender must match the agent's voiceDesign.identity");
+    expect(prompt).toContain('A neutral voice, or a voice with no gender, is not mismatched');
+  });
 });

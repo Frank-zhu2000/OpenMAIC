@@ -208,7 +208,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const index = agentIndexMap.current.get(agentId!) ?? 0;
       return applyUnavailableBindingFallback(
         agent.id,
-        resolveAgentVoice(agent, index, providers, agentVoiceOverrides),
+        resolveAgentVoice(agent, index, providers, agentVoiceOverrides, { roster: agents }),
         globalVoice,
         firstVoice,
       );

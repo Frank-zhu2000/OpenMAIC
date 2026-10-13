@@ -69,11 +69,13 @@ function isNonPreviewableVoice(providerId: TTSProviderId, voiceId: string): bool
 function AgentVoicePill({
   agent,
   agentIndex,
+  roster,
   availableProviders,
   disabled,
 }: {
   agent: AgentConfig;
   agentIndex: number;
+  roster: AgentConfig[];
   availableProviders: ProviderWithVoices[];
   disabled?: boolean;
 }) {
@@ -81,7 +83,9 @@ function AgentVoicePill({
   const ttsProvidersConfig = useSlotTTSProvidersConfig();
   const agentVoiceOverrides = useSettingsStore((s) => s.agentVoiceOverrides);
   const setAgentVoiceOverride = useSettingsStore((s) => s.setAgentVoiceOverride);
-  const resolved = resolveAgentVoice(agent, agentIndex, availableProviders, agentVoiceOverrides);
+  const resolved = resolveAgentVoice(agent, agentIndex, availableProviders, agentVoiceOverrides, {
+    roster,
+  });
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [voiceQuery, setVoiceQuery] = useState('');
   const [previewingId, setPreviewingId] = useState<string | null>(null);
@@ -622,6 +626,14 @@ export function AgentBar() {
 
   const allAgents = listAgents();
   const agents = allAgents.filter((a) => !a.isGenerated);
+  // Indexes passed below are idx + 1 among non-teachers, so slot 0 stays empty
+  // and a catalogue with no gender still uses that index.
+  const voiceRoster: AgentConfig[] = [];
+  agents
+    .filter((agent) => agent.role !== 'teacher')
+    .forEach((agent, idx) => {
+      voiceRoster[idx + 1] = agent;
+    });
   const teacherAgent = agents.find((a) => a.role === 'teacher');
   const selectedAgents = agents.filter((a) => selectedAgentIds.includes(a.id));
   const nonTeacherSelected = selectedAgents.filter((a) => a.role !== 'teacher');
@@ -796,6 +808,7 @@ export function AgentBar() {
         <AgentVoicePill
           agent={agent}
           agentIndex={agentIndex}
+          roster={voiceRoster}
           availableProviders={availableProviders}
           disabled={!ttsEnabled || availableProviders.length === 0}
         />

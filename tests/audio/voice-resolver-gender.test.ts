@@ -158,4 +158,67 @@ describe('resolveAgentVoice gender fallback', () => {
       voiceId: 'Cherry',
     });
   });
+
+  it('treats a neutral-only catalogue like one with no gender data', () => {
+    const female = withIdentity('middle-aged female teacher');
+    for (const providerId of ['google-tts', 'voxcpm-tts'] as const) {
+      const providers = getEnabledProvidersWithVoices({
+        [providerId]: { isServerConfigured: true, enabled: true },
+      });
+      expect(providers[0]?.voices.length).toBeGreaterThan(0);
+      expect(providers[0].voices.every((voice) => voice.gender === 'neutral')).toBe(true);
+      if (providerId === 'voxcpm-tts') {
+        expect(providers[0].voices.map((voice) => voice.id)).toEqual(['voxcpm:auto']);
+      }
+      const stripped: ProviderWithVoices[] = [
+        {
+          ...providers[0],
+          voices: providers[0].voices.map((voice) => ({
+            id: voice.id,
+            name: voice.name,
+            ...(voice.language ? { language: voice.language } : {}),
+          })),
+        },
+      ];
+      const roster = [
+        female,
+        withIdentity('young male student'),
+        female,
+        withIdentity('young female student'),
+      ];
+      expect(resolveAgentVoice(female, 0, providers)).toEqual(
+        resolveAgentVoice(female, 0, stripped),
+      );
+      expect(resolveAgentVoice(female, 1, providers)?.voiceId).toBe(
+        resolveAgentVoice(female, 1, stripped)?.voiceId,
+      );
+      // A roster must not pull a neutral-only catalogue off the index pick.
+      expect(resolveAgentVoice(roster[3], 3, providers, undefined, { roster })?.voiceId).toBe(
+        resolveAgentVoice(female, 3, stripped)?.voiceId,
+      );
+    }
+  });
+
+  it('gives distinct OpenAI voices to same-gender agents whose indexes collide modulo the subset', () => {
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+    });
+    expect(
+      providers[0].voices.filter((voice) => voice.gender === 'female').map((voice) => voice.id),
+    ).toEqual(['nova', 'shimmer']);
+    // Indexes 1 and 3 are congruent modulo the two female voices, so a global
+    // index lands both on shimmer. They are the first and second female agents.
+    const roster = [
+      withIdentity('middle-aged male teacher'),
+      withIdentity('young female student'),
+      withIdentity('young male student'),
+      withIdentity('middle-aged female teacher'),
+    ];
+    const voices = roster.map(
+      (agent, index) => resolveAgentVoice(agent, index, providers, undefined, { roster })?.voiceId,
+    );
+    expect(voices[1]).toBe('nova');
+    expect(voices[3]).toBe('shimmer');
+    expect(new Set([voices[0], voices[2]]).size).toBe(2);
+  });
 });

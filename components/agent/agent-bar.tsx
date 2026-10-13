@@ -9,7 +9,11 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useSlotTTSProvidersConfig, useTTSSelection } from '@/lib/audio/use-tts-selection';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
-import { resolveAgentVoice, getSelectableProvidersWithVoices } from '@/lib/audio/voice-resolver';
+import {
+  getSelectableProvidersWithVoices,
+  resolveAgentVoice,
+  voicePillPlaybackRoster,
+} from '@/lib/audio/voice-resolver';
 import { playBrowserTTSPreview } from '@/lib/audio/browser-tts-preview';
 import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { resolveAgentVoiceOptions } from '@/lib/audio/agent-voice';
@@ -626,14 +630,6 @@ export function AgentBar() {
 
   const allAgents = listAgents();
   const agents = allAgents.filter((a) => !a.isGenerated);
-  // Indexes passed below are idx + 1 among non-teachers, so slot 0 stays empty
-  // and a catalogue with no gender still uses that index.
-  const voiceRoster: AgentConfig[] = [];
-  agents
-    .filter((agent) => agent.role !== 'teacher')
-    .forEach((agent, idx) => {
-      voiceRoster[idx + 1] = agent;
-    });
   const teacherAgent = agents.find((a) => a.role === 'teacher');
   const selectedAgents = agents.filter((a) => selectedAgentIds.includes(a.id));
   const nonTeacherSelected = selectedAgents.filter((a) => a.role !== 'teacher');
@@ -775,8 +771,10 @@ export function AgentBar() {
     </div>
   );
 
-  const renderAgentRow = (agent: AgentConfig, agentIndex: number, isTeacher: boolean) => {
+  const renderAgentRow = (agent: AgentConfig, isTeacher: boolean) => {
     const isSelected = isTeacher || selectedAgentIds.includes(agent.id);
+    // Same roster and index discussion playback passes to resolveAgentVoice.
+    const { roster, index } = voicePillPlaybackRoster(allAgents, selectedAgentIds, agent);
     return (
       <div
         key={agent.id}
@@ -807,8 +805,8 @@ export function AgentBar() {
         </span>
         <AgentVoicePill
           agent={agent}
-          agentIndex={agentIndex}
-          roster={voiceRoster}
+          agentIndex={index}
+          roster={roster}
           availableProviders={availableProviders}
           disabled={!ttsEnabled || availableProviders.length === 0}
         />
@@ -909,7 +907,7 @@ export function AgentBar() {
                 <div className="max-h-56 overflow-y-auto -mx-0.5">
                   {agents
                     .filter((a) => a.role !== 'teacher')
-                    .map((agent, idx) => renderAgentRow(agent, idx + 1, false))}
+                    .map((agent) => renderAgentRow(agent, false))}
                 </div>
               ) : (
                 <div className="flex flex-col items-center pt-6 pb-3 gap-4">

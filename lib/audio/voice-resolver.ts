@@ -130,6 +130,32 @@ export function resolveAgentVoice(
 }
 
 /**
+ * Roster and index for one AgentBar voice pill.
+ *
+ * Discussion playback resolves voices against the selected agents in
+ * `selectedAgentIds` order. The pill must use that roster. An unselected
+ * catalogue agent would otherwise reserve a configured voice or take an
+ * earlier same-gender fallback, and the pill would name a voice playback
+ * will not speak. A row that is not selected is appended, so its pill is the
+ * voice that agent would speak if the user selected it now.
+ */
+export function voicePillPlaybackRoster(
+  agents: readonly AgentConfig[],
+  selectedAgentIds: readonly string[],
+  agent: AgentConfig,
+): { roster: AgentConfig[]; index: number } {
+  const byId = new Map(agents.map((entry) => [entry.id, entry]));
+  const selected: AgentConfig[] = [];
+  for (const id of selectedAgentIds) {
+    const entry = byId.get(id);
+    if (entry) selected.push(entry);
+  }
+  const index = selected.findIndex((entry) => entry.id === agent.id);
+  if (index >= 0) return { roster: selected, index };
+  return { roster: [...selected, agent], index: selected.length };
+}
+
+/**
  * A stored or overridden voice whose provider is enabled. Browser-native is
  * accepted when that provider is in the enabled list (its voices are dynamic).
  * Qwen accepts a catalog voice or any non-empty id, including a clone that is

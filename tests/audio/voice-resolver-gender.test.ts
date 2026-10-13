@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getEnabledProvidersWithVoices,
   resolveAgentVoice,
+  voicePillPlaybackRoster,
   type ProviderWithVoices,
 } from '@/lib/audio/voice-resolver';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
@@ -333,5 +334,95 @@ describe('resolveAgentVoice gender fallback', () => {
     );
     expect(voices[0]).toBe('nova');
     expect(voices[2]).toBe('shimmer');
+  });
+});
+
+describe('voice pill playback roster', () => {
+  function female(id: string, voiceConfig?: AgentConfig['voiceConfig']): AgentConfig {
+    return agent({
+      id,
+      role: 'student',
+      voiceDesign: { identity: 'young female student', texture: 'warm', delivery: 'calm' },
+      voiceConfig,
+    });
+  }
+
+  function openAI() {
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+    });
+    expect(
+      providers[0].voices.filter((voice) => voice.gender === 'female').map((voice) => voice.id),
+    ).toEqual(['nova', 'shimmer']);
+    return providers;
+  }
+
+  it('keeps a selected pill on the voice playback will speak when an earlier peer is unselected', () => {
+    const providers = openAI();
+    const teacher = agent({ id: 'default-1', role: 'teacher' });
+    const first = female('custom-1');
+    const second = female('custom-2');
+    const catalogue = [teacher, first, second];
+    // Teacher stays selected. Only the second unbound female custom agent is selected.
+    const selectedAgentIds = ['default-1', 'custom-2'];
+    const playback = selectedAgentIds
+      .map((id) => catalogue.find((entry) => entry.id === id))
+      .filter((entry): entry is AgentConfig => entry != null);
+    const spokenIndex = playback.findIndex((entry) => entry.id === second.id);
+
+    const pill = voicePillPlaybackRoster(catalogue, selectedAgentIds, second);
+    const displayed = resolveAgentVoice(second, pill.index, providers, undefined, {
+      roster: pill.roster,
+    });
+    const spoken = resolveAgentVoice(second, spokenIndex, providers, undefined, {
+      roster: playback,
+    });
+
+    // An unselected earlier female must not move this pill off nova.
+    expect(displayed?.voiceId).toBe('nova');
+    expect(displayed).toEqual(spoken);
+    expect(pill.roster.map((entry) => entry?.id)).toEqual(['default-1', 'custom-2']);
+    expect(pill.index).toBe(spokenIndex);
+  });
+
+  it('does not reserve a voice configured on an unselected agent', () => {
+    const providers = openAI();
+    const first = female('custom-1', { providerId: 'openai-tts', voiceId: 'nova' });
+    const second = female('custom-2');
+    const catalogue = [first, second];
+    const selectedAgentIds = ['custom-2'];
+
+    const pill = voicePillPlaybackRoster(catalogue, selectedAgentIds, second);
+    const displayed = resolveAgentVoice(second, pill.index, providers, undefined, {
+      roster: pill.roster,
+    });
+
+    expect(displayed?.voiceId).toBe('nova');
+    expect(pill.roster.map((entry) => entry.id)).toEqual(['custom-2']);
+  });
+
+  it('appends an unselected row so its pill is the voice selecting it would speak', () => {
+    const providers = openAI();
+    const teacher = agent({ id: 'default-1', role: 'teacher' });
+    const first = female('custom-1');
+    const second = female('custom-2');
+    const catalogue = [teacher, first, second];
+    const selectedAgentIds = ['default-1', 'custom-2'];
+    const playback = selectedAgentIds
+      .map((id) => catalogue.find((entry) => entry.id === id))
+      .filter((entry): entry is AgentConfig => entry != null);
+    const ifSelected = [...playback, first];
+
+    const pill = voicePillPlaybackRoster(catalogue, selectedAgentIds, first);
+    const displayed = resolveAgentVoice(first, pill.index, providers, undefined, {
+      roster: pill.roster,
+    });
+    const spoken = resolveAgentVoice(first, ifSelected.length - 1, providers, undefined, {
+      roster: ifSelected,
+    });
+
+    expect(displayed).toEqual(spoken);
+    expect(pill.roster.map((entry) => entry.id)).toEqual(['default-1', 'custom-2', 'custom-1']);
+    expect(pill.index).toBe(ifSelected.length - 1);
   });
 });

@@ -25,6 +25,8 @@ export interface AgentProfilesInput {
     voiceId: string;
     voiceName: string;
     voiceLanguage?: string;
+    /** Catalog gender, when the provider lists one. */
+    gender?: 'male' | 'female' | 'neutral';
   }>;
   /** The user's globally selected TTS voice; the teacher/narrator must use it. */
   narratorVoice?: {
@@ -129,6 +131,91 @@ function resolveNarratorVoice(
   return undefined;
 }
 
+type BinaryVoiceGender = 'male' | 'female';
+
+/**
+ * English "male" / "female" only. voiceDesign.identity follows the course
+ * language, so a localized identity (neither word) is left unchanged.
+ */
+function identityGender(identity: string | undefined): BinaryVoiceGender | undefined {
+  if (!identity) return undefined;
+  const female = /\bfemale\b/i.test(identity);
+  const male = /\bmale\b/i.test(identity);
+  if (female === male) return undefined;
+  return female ? 'female' : 'male';
+}
+
+function pickMatchingGenderVoice(
+  voices: AdvertisedVoice[],
+  wanted: BinaryVoiceGender,
+  preferredLanguage: string | undefined,
+  usage: Map<string, number>,
+  reserved: string | undefined,
+): AdvertisedVoice | undefined {
+  const free = voices.filter((voice) => {
+    if (voice.gender !== wanted) return false;
+    const key = advertisedVoiceToken(voice);
+    if (reserved !== undefined && key === reserved) return false;
+    return (usage.get(key) ?? 0) <= 0;
+  });
+  if (preferredLanguage) {
+    const sameLanguage = free.find((voice) => voice.voiceLanguage === preferredLanguage);
+    if (sameLanguage) return sameLanguage;
+  }
+  return free[0];
+}
+
+/**
+ * Swap a chosen voice whose catalog gender is the opposite of an identity
+ * that says male or female. Same language is preferred; an unused voice of
+ * the matching gender is required. Unknown and neutral genders stay. The
+ * fixed narrator binding is never reassigned.
+ */
+function reconcileOppositeVoiceGenders(
+  agents: GeneratedAgentProfile[],
+  availableVoices: AdvertisedVoice[] | undefined,
+  narratorBinding: VoiceBinding | undefined,
+): void {
+  if (!availableVoices?.length) return;
+  const usage = new Map<string, number>();
+  for (const agent of agents) {
+    if (!agent.voiceConfig) continue;
+    const key = advertisedVoiceToken(agent.voiceConfig);
+    usage.set(key, (usage.get(key) ?? 0) + 1);
+  }
+  const reserved = narratorBinding ? advertisedVoiceToken(narratorBinding) : undefined;
+
+  for (const agent of agents) {
+    if (narratorBinding && agent.role === 'teacher') continue;
+    const wanted = identityGender(agent.voiceDesign?.identity);
+    if (!wanted || !agent.voiceConfig) continue;
+    const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
+    if (!current || (current.gender !== 'male' && current.gender !== 'female')) continue;
+    if (current.gender === wanted) continue;
+
+    const currentKey = advertisedVoiceToken(current);
+    usage.set(currentKey, (usage.get(currentKey) ?? 0) - 1);
+    const replacement = pickMatchingGenderVoice(
+      availableVoices,
+      wanted,
+      current.voiceLanguage,
+      usage,
+      reserved,
+    );
+    if (!replacement) {
+      usage.set(currentKey, (usage.get(currentKey) ?? 0) + 1);
+      continue;
+    }
+    agent.voiceConfig = {
+      providerId: replacement.providerId,
+      ...(replacement.modelId ? { modelId: replacement.modelId } : {}),
+      voiceId: replacement.voiceId,
+    };
+    const replacementKey = advertisedVoiceToken(replacement);
+    usage.set(replacementKey, (usage.get(replacementKey) ?? 0) + 1);
+  }
+}
+
 function stripCodeFences(text: string): string {
   let cleaned = text.trim();
   // Remove markdown code fences (```json ... ``` or ``` ... ```)
@@ -177,6 +264,7 @@ export async function generateAgentProfiles(
             id: advertisedVoiceToken(v),
             name: v.voiceName,
             language: v.voiceLanguage || 'unknown',
+            ...(v.gender ? { gender: v.gender } : {}),
           })),
         )
       : '';
@@ -187,11 +275,13 @@ export async function generateAgentProfiles(
   - Every OTHER agent must still be assigned a voice from this list: ${voiceListStr}
   - Prefer a voice whose language matches the course language directive
   - Pick a voice that suits each agent's personality and role (e.g. lively voice for energetic student)
+  - The voice's gender must match the agent's voiceDesign.identity
   - Try to use different voices for each non-teacher agent
   - Never assign the fixed teacher narrator voice to any other agent`
       : `- Each agent should be assigned a voice that matches their persona from this list: ${voiceListStr}
   - Prefer a voice whose language matches the course language directive
   - Pick a voice that suits the agent's personality and role (e.g. authoritative voice for teacher, lively voice for energetic student)
+  - The voice's gender must match the agent's voiceDesign.identity
   - Try to use different voices for each agent`
     : '';
 
@@ -345,6 +435,8 @@ Return a JSON object with this exact structure:
       ...(voiceDesign ? { voiceDesign } : {}),
     };
   });
+
+  reconcileOppositeVoiceGenders(agents, availableVoices, narratorBinding);
 
   log.info(`Successfully generated ${agents.length} agent profiles for "${stageInfo.name}"`);
   return agents;

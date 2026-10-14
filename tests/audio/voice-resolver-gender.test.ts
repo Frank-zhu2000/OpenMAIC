@@ -425,4 +425,115 @@ describe('voice pill playback roster', () => {
     expect(pill.roster.map((entry) => entry.id)).toEqual(['default-1', 'custom-2', 'custom-1']);
     expect(pill.index).toBe(ifSelected.length - 1);
   });
+
+  it('matches playback when an unselected agent is bound to nova', () => {
+    // Breaks if the pill roster still counts unselected agents: the pill would
+    // show shimmer while playback, given only the selected agent, speaks nova.
+    const providers = openAI();
+    const unselected = female('custom-1', { providerId: 'openai-tts', voiceId: 'nova' });
+    const selected = female('custom-2');
+    const catalogue = [unselected, selected];
+    const selectedAgentIds = ['custom-2'];
+    const playback = selectedAgentIds
+      .map((id) => catalogue.find((entry) => entry.id === id))
+      .filter((entry): entry is AgentConfig => entry != null);
+
+    const pill = voicePillPlaybackRoster(catalogue, selectedAgentIds, selected);
+    const displayed = resolveAgentVoice(selected, pill.index, providers, undefined, {
+      roster: pill.roster,
+    });
+    const spoken = resolveAgentVoice(selected, 0, providers, undefined, { roster: playback });
+
+    expect(displayed).toEqual(spoken);
+    expect(spoken?.voiceId).toBe('nova');
+    expect(pill.roster.map((entry) => entry.id)).toEqual(['custom-2']);
+  });
+
+  it('matches playback when the selected teacher reserves MiniMax female-yujie', () => {
+    // Breaks if the pill roster drops the teacher: the pill would show
+    // female-yujie while playback, which reserves the teacher's voice, speaks
+    // female-shaonv.
+    const providers = getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+    const teacher = agent({
+      id: 'default-1',
+      role: 'teacher',
+      voiceConfig: { providerId: 'minimax-tts', voiceId: 'female-yujie' },
+    });
+    const student = female('custom-2');
+    const catalogue = [teacher, student];
+    const selectedAgentIds = ['default-1', 'custom-2'];
+    const playback = selectedAgentIds
+      .map((id) => catalogue.find((entry) => entry.id === id))
+      .filter((entry): entry is AgentConfig => entry != null);
+    const spokenIndex = playback.findIndex((entry) => entry.id === student.id);
+
+    const pill = voicePillPlaybackRoster(catalogue, selectedAgentIds, student);
+    const displayed = resolveAgentVoice(student, pill.index, providers, undefined, {
+      roster: pill.roster,
+    });
+    const spoken = resolveAgentVoice(student, spokenIndex, providers, undefined, {
+      roster: playback,
+    });
+
+    expect(displayed).toEqual(spoken);
+    expect(spoken?.voiceId).toBe('female-shaonv');
+    expect(pill.roster.map((entry) => entry.id)).toEqual(['default-1', 'custom-2']);
+  });
+});
+
+describe('resolveAgentVoice localized gender field', () => {
+  function minimax() {
+    return getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+  }
+
+  function chineseFemale(voiceConfig?: AgentConfig['voiceConfig']): AgentConfig {
+    return agent({
+      role: 'student',
+      voiceConfig,
+      voiceDesign: {
+        identity: '年轻女性学生',
+        texture: '清亮',
+        delivery: '轻快',
+        gender: 'female',
+      },
+    });
+  }
+
+  it('uses voiceDesign.gender when a Chinese identity has no voice', () => {
+    // Index 1 of the full MiniMax list is male-qn-jingying. A gender-blind
+    // fallback lands there; a female field must take the second female voice.
+    expect(resolveAgentVoice(chineseFemale(), 1, minimax())?.voiceId).toBe('female-shaonv');
+  });
+
+  it('uses voiceDesign.gender when a Chinese identity has an invalid voice', () => {
+    const unbound = chineseFemale({
+      providerId: 'minimax-tts',
+      voiceId: 'not-a-catalogue-voice',
+    });
+    expect(resolveAgentVoice(unbound, 1, minimax())?.voiceId).toBe('female-shaonv');
+  });
+
+  it('keeps the index pick for a Chinese identity when gender is absent', () => {
+    const providers = minimax();
+    expect(resolveAgentVoice(withIdentity('年轻女性学生'), 1, providers)?.voiceId).toBe(
+      'male-qn-jingying',
+    );
+  });
+
+  it('gives a later Chinese agent the next female voice using voiceDesign.gender', () => {
+    const providers = minimax();
+    const first = chineseFemale();
+    const second = chineseFemale();
+    const roster = [first, second];
+    expect(resolveAgentVoice(first, 0, providers, undefined, { roster })?.voiceId).toBe(
+      'female-yujie',
+    );
+    expect(resolveAgentVoice(second, 1, providers, undefined, { roster })?.voiceId).toBe(
+      'female-shaonv',
+    );
+  });
 });

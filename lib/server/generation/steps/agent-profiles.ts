@@ -145,6 +145,15 @@ function identityGender(identity: string | undefined): BinaryVoiceGender | undef
   return female ? 'female' : 'male';
 }
 
+/** Explicit voiceDesign.gender wins. A missing field keeps the English identity fallback. */
+function profileGender(agent: {
+  voiceDesign?: { identity?: string; gender?: unknown };
+}): BinaryVoiceGender | undefined {
+  const explicit = agent.voiceDesign?.gender;
+  if (explicit === 'male' || explicit === 'female') return explicit;
+  return identityGender(agent.voiceDesign?.identity);
+}
+
 function pickMatchingGenderVoice(
   voices: AdvertisedVoice[],
   wanted: BinaryVoiceGender,
@@ -191,7 +200,7 @@ function hasOppositeVoiceGender(
   availableVoices: AdvertisedVoice[],
 ): boolean {
   if (!agent.voiceConfig) return false;
-  const wanted = identityGender(agent.voiceDesign?.identity);
+  const wanted = profileGender(agent);
   if (!wanted) return false;
   const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
   if (!current || (current.gender !== 'male' && current.gender !== 'female')) return false;
@@ -239,7 +248,7 @@ function reconcileOppositeVoiceGenders(
     const gaveUp = new Set<GeneratedAgentProfile>();
     for (const agent of agents) {
       if (!canMove(agent) || !agent.voiceConfig) continue;
-      const wanted = identityGender(agent.voiceDesign?.identity);
+      const wanted = profileGender(agent);
       const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
       if (!wanted || !current) continue;
 
@@ -324,7 +333,8 @@ export async function generateAgentProfiles(
   // match. Asking the model to align identity, name, and persona would collapse
   // them onto "neutral".
   const genderMatchRules = binaryGenderListed
-    ? `  - The voice's gender must match the agent's voiceDesign.identity
+    ? `  - The voice's gender must match the agent's voiceDesign.gender
+  - The voice's gender must match the agent's voiceDesign.identity
   - Keep the agent's name and persona consistent with that gender
   - Only a voice labeled male or female takes part in that match. A neutral voice, or a voice with no gender, is not mismatched and must not change the agent's name, persona, or identity
 `
@@ -383,10 +393,11 @@ Requirements:
   - Use the "path" value as the avatar field in the output
 - Each agent must be assigned one color from this list: ${JSON.stringify(AGENT_COLOR_PALETTE)}
   - Each agent must have a different color
-- Each agent needs a "voiceDesign" object describing their VOCAL identity (not personality), written following the language directive and consistent with the persona, as three short comma-free phrases:
-  - "identity": gender + age + role (e.g. "middle-aged male teacher")
-  - "texture": pitch + vocal quality (e.g. "warm low-pitched slightly husky")
-  - "delivery": emotion + pace (e.g. "calm measured encouraging")
+- Each agent needs a "voiceDesign" object describing their VOCAL identity (not personality), consistent with the persona:
+  - "identity": gender + age + role as one short comma-free phrase in the course language (e.g. "middle-aged male teacher" when the course language is English)
+  - "gender": "male" or "female" only. These two English words, never a translation, naming the same gender as identity. voiceDesign.gender is language-independent
+  - "texture": pitch + vocal quality as one short comma-free phrase (e.g. "warm low-pitched slightly husky")
+  - "delivery": emotion + pace as one short comma-free phrase (e.g. "calm measured encouraging")
 ${voicePrompt}
 
 Return a JSON object with this exact structure:
@@ -396,7 +407,7 @@ Return a JSON object with this exact structure:
       "name": "string",
       "role": "teacher" | "assistant" | "student",
       "persona": "string (2-3 sentences)",
-      "voiceDesign": { "identity": "string", "texture": "string", "delivery": "string" },
+      "voiceDesign": { "identity": "string", "gender": "male" | "female", "texture": "string", "delivery": "string" },
       "avatar": "string (from available list)",
       "color": "string (hex color from palette)",
       "priority": number (10 for teacher, 7 for assistant, 4-6 for student)${voiceJsonField}

@@ -10,6 +10,8 @@ import {
   advertisedVoices,
   type RunNarrationTarget,
 } from '@/lib/server/generation/run/narration-voice';
+import { getEnabledProvidersWithVoices, resolveAgentVoice } from '@/lib/audio/voice-resolver';
+import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import {
   generateAgentProfiles,
   type AgentProfilesInput,
@@ -852,5 +854,184 @@ describe('agent profiles — voice gender', () => {
     expect(
       (await assign([maleOnXiaoyi, femaleOnYunxi])).map((entry) => entry.voiceConfig?.voiceId),
     ).toEqual(['zh-CN-XiaoxiaoNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaoyiNeural']);
+  });
+});
+
+describe('agent profiles — localized identity gender field', () => {
+  beforeEach(() => callLLM.mockReset());
+
+  function chineseDesign(identity: string, gender?: 'male' | 'female') {
+    return {
+      identity,
+      texture: '清亮',
+      delivery: '轻快',
+      ...(gender ? { gender } : {}),
+    };
+  }
+
+  function minimaxProviders() {
+    return getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+  }
+
+  it('asks for an English voiceDesign.gender and a course-language identity', async () => {
+    await generate(
+      [
+        profile({ name: '林老师', role: 'teacher', voice: token('female-yujie') }),
+        profile({ name: '小青', role: 'student', voice: token('female-shaonv') }),
+      ],
+      {
+        stageInfo: { name: '代数入门' },
+        languageDirective: '请使用简体中文。',
+      },
+    );
+
+    const prompt = callLLM.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('"gender": "male" | "female"');
+    expect(prompt).toContain('voiceDesign.gender');
+    expect(prompt).toContain('"male" or "female"');
+    expect(prompt).toContain('course language');
+  });
+
+  it('keeps a Chinese identity and resolves a missing voice from voiceDesign.gender', async () => {
+    const agents = await generate(
+      [
+        profile({
+          name: '林老师',
+          role: 'teacher',
+          voice: token('female-yujie'),
+          voiceDesign: chineseDesign('中年女性教师', 'female'),
+        }),
+        profile({
+          name: '小青',
+          role: 'student',
+          voiceDesign: chineseDesign('年轻女性学生', 'female'),
+        }),
+      ],
+      {
+        stageInfo: { name: '代数入门' },
+        languageDirective: '请使用简体中文。',
+      },
+    );
+
+    expect(agents[1].voiceConfig).toBeUndefined();
+    expect(agents[1].voiceDesign).toEqual(chineseDesign('年轻女性学生', 'female'));
+    // Index 1 of the MiniMax catalogue is male-qn-jingying unless gender is used.
+    expect(resolveAgentVoice(agents[1] as AgentConfig, 1, minimaxProviders())?.voiceId).toBe(
+      'female-shaonv',
+    );
+  });
+
+  it('keeps a Chinese identity and resolves an invalid voice from voiceDesign.gender', async () => {
+    const agents = await generate(
+      [
+        profile({
+          name: '林老师',
+          role: 'teacher',
+          voice: token('female-yujie'),
+          voiceDesign: chineseDesign('中年女性教师', 'female'),
+        }),
+        profile({
+          name: '小青',
+          role: 'student',
+          voice: 'minimax-tts::not-a-catalogue-voice',
+          voiceDesign: chineseDesign('年轻女性学生', 'female'),
+        }),
+      ],
+      {
+        stageInfo: { name: '代数入门' },
+        languageDirective: '请使用简体中文。',
+      },
+    );
+
+    expect(agents[1].voiceConfig).toBeUndefined();
+    expect(agents[1].voiceDesign).toEqual(chineseDesign('年轻女性学生', 'female'));
+    expect(resolveAgentVoice(agents[1] as AgentConfig, 1, minimaxProviders())?.voiceId).toBe(
+      'female-shaonv',
+    );
+  });
+
+  it('reconciles a known opposite-gender voice using voiceDesign.gender', async () => {
+    const agents = await generate(
+      [
+        profile({
+          name: '林老师',
+          role: 'teacher',
+          voice: token('female-yujie'),
+          voiceDesign: chineseDesign('中年女性教师', 'female'),
+        }),
+        profile({
+          name: '小青',
+          role: 'student',
+          voice: token('male-qn-jingying'),
+          voiceDesign: chineseDesign('年轻女性学生', 'female'),
+        }),
+      ],
+      {
+        stageInfo: { name: '代数入门' },
+        languageDirective: '请使用简体中文。',
+      },
+    );
+
+    expect(agents[0].voiceConfig).toEqual({ providerId: 'minimax-tts', voiceId: 'female-yujie' });
+    expect(agents[1].voiceConfig).toEqual({ providerId: 'minimax-tts', voiceId: 'female-shaonv' });
+    expect(agents[1].voiceDesign).toEqual(chineseDesign('年轻女性学生', 'female'));
+  });
+
+  it('does not move a Chinese identity when gender is absent', async () => {
+    const agents = await generate(
+      [
+        profile({
+          name: '林老师',
+          role: 'teacher',
+          voice: token('female-yujie'),
+          voiceDesign: chineseDesign('中年女性教师'),
+        }),
+        profile({
+          name: '小青',
+          role: 'student',
+          voice: token('male-qn-jingying'),
+          voiceDesign: chineseDesign('年轻女性学生'),
+        }),
+      ],
+      {
+        stageInfo: { name: '代数入门' },
+        languageDirective: '请使用简体中文。',
+      },
+    );
+
+    expect(agents[1].voiceConfig?.voiceId).toBe('male-qn-jingying');
+    expect(agents[1].voiceDesign).toEqual(chineseDesign('年轻女性学生'));
+  });
+
+  it('prefers voiceDesign.gender over a contradictory English identity', async () => {
+    const agents = await generate([
+      profile({
+        name: 'Lin',
+        role: 'teacher',
+        voice: token('female-yujie'),
+        voiceDesign: {
+          identity: 'middle-aged female teacher',
+          texture: 'warm',
+          delivery: 'calm',
+          gender: 'female',
+        },
+      }),
+      profile({
+        name: 'Sam',
+        role: 'student',
+        voice: token('male-qn-jingying'),
+        voiceDesign: {
+          identity: 'young male student',
+          texture: 'bright',
+          delivery: 'quick',
+          gender: 'female',
+        },
+      }),
+    ]);
+
+    expect(agents[1].voiceConfig?.voiceId).toBe('female-shaonv');
+    expect(agents[1].voiceDesign?.identity).toBe('young male student');
   });
 });

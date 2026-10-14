@@ -124,7 +124,7 @@ export function resolveAgentVoice(
   return resolveDeterministicFallbackVoice(
     enabledProviders,
     agentIndex,
-    identityGender(agent.voiceDesign?.identity),
+    agentBinaryGender(agent),
     options?.roster ? { agents: options.roster, overrides } : undefined,
   );
 }
@@ -237,6 +237,13 @@ function identityGender(identity: string | undefined): 'male' | 'female' | undef
   return female ? 'female' : 'male';
 }
 
+/** Explicit voiceDesign.gender wins. Absent field keeps the English identity fallback. */
+function agentBinaryGender(agent: AgentConfig): 'male' | 'female' | undefined {
+  const explicit = agent.voiceDesign?.gender;
+  if (explicit === 'male' || explicit === 'female') return explicit;
+  return identityGender(agent.voiceDesign?.identity);
+}
+
 /**
  * The deterministic last-resort voice pick shared by `resolveAgentVoice` and
  * the narrator fallback: the first ENABLED provider in canonical order and one
@@ -332,7 +339,7 @@ function distinctGenderVoiceId(
     if (!earlier) continue;
     if (resolveConfiguredAgentVoice(earlier, enabledProviders, roster.overrides)) continue;
     if (earlier.role === 'teacher') continue;
-    if (identityGender(earlier.voiceDesign?.identity) !== agentGender) continue;
+    if (agentBinaryGender(earlier) !== agentGender) continue;
     used.add(distinctVoiceId(pool, used, overflow));
     overflow += 1;
   }

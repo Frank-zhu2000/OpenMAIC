@@ -110,6 +110,59 @@ export function classroomExportBaseName(stageName: string): string {
   return stageName.replace(/[\\/:*?"<>|]/g, '_') || 'classroom';
 }
 
+/** Common single-component filename limit (NAME_MAX), in UTF-8 bytes. */
+const CLASSROOM_EXPORT_FILENAME_MAX_BYTES = 255;
+/** Course ids are short; the cap stops a hostile id from crowding out the title. */
+const CLASSROOM_EXPORT_ID_MAX_CHARS = 64;
+
+function takeUtf8Prefix(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  const encoder = new TextEncoder();
+  let used = 0;
+  let out = '';
+  for (const char of value) {
+    const size = encoder.encode(char).length;
+    if (used + size > maxBytes) break;
+    used += size;
+    out += char;
+  }
+  return out;
+}
+
+function classroomExportIdFragment(stageId: string): string {
+  const safe = stageId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, CLASSROOM_EXPORT_ID_MAX_CHARS);
+  return safe || 'course';
+}
+
+/** Compact form of `manifest.exportedAt`, milliseconds included (`20260916T023456789Z`). */
+function classroomExportStamp(exportedAt: string): string {
+  const compact = exportedAt.replace(/[-:.]/g, '').replace(/[^0-9A-Za-z]/g, '');
+  return compact.slice(0, 32) || 'undated';
+}
+
+/**
+ * `<title>-<courseId>-<exportedAt>.maic.zip`.
+ *
+ * Server-minted course ids share the `stage-` prefix, so a few-character prefix
+ * would not distinguish them. The stamp is the exact `manifest.exportedAt` value with
+ * separators removed. The title is shortened on code-point boundaries so the
+ * UTF-8 name stays within 255 bytes.
+ */
+export function classroomExportFileName(
+  stageName: string,
+  stageId: string,
+  exportedAt: string,
+): string {
+  const idPart = classroomExportIdFragment(stageId);
+  const stamp = classroomExportStamp(exportedAt);
+  const suffix = `-${idPart}-${stamp}${CLASSROOM_ZIP_EXTENSION}`;
+  const titleBudget = CLASSROOM_EXPORT_FILENAME_MAX_BYTES - new TextEncoder().encode(suffix).length;
+  const title =
+    takeUtf8Prefix(classroomExportBaseName(stageName).trim(), Math.max(0, titleBudget)) ||
+    'classroom';
+  return `${title}${suffix}`;
+}
+
 /**
  * Build one consistent classroom export snapshot.
  *
@@ -363,7 +416,7 @@ export async function buildClassroomExportZip(
 
   return {
     zip: zipBlob,
-    fileName: `${classroomExportBaseName(snapshot.stageName)}${CLASSROOM_ZIP_EXTENSION}`,
+    fileName: classroomExportFileName(snapshot.stageName, stage.id, snapshot.manifest.exportedAt),
     inlineFailures: snapshot.inlineFailures,
     missingAudioCount: snapshot.missingAudioCount,
   };

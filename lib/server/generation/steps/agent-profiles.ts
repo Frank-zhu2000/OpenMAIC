@@ -170,9 +170,9 @@ function pickMatchingGenderVoice(
     return (usage.get(key) ?? 0) <= 0;
   });
   // Same language and nobody holds it, then same language held only by an
-  // agent who will still move, then another language nobody holds, then any
-  // other unused match. Stuck means a holder will not leave (failed move,
-  // narrator, or already matching).
+  // agent who can still move, then another language nobody holds, then any
+  // other unused match. Stuck means a holder will not leave: failed move,
+  // narrator, already matching, or no possible destination yet.
   const rank = (voice: AdvertisedVoice): number => {
     const key = advertisedVoiceToken(voice);
     const sameLanguage = !preferredLanguage || voice.voiceLanguage === preferredLanguage;
@@ -208,14 +208,72 @@ function hasOppositeVoiceGender(
 }
 
 /**
+ * Voices currently held, and those a holder will not leave. A mismatched
+ * holder with no destination is stuck before they try, so their voice is not
+ * taken ahead of a free one. Repeat until a holder whose only hope was that
+ * voice is stuck too.
+ */
+function voiceHolds(
+  agents: GeneratedAgentProfile[],
+  availableVoices: AdvertisedVoice[],
+  usage: Map<string, number>,
+  reserved: string | undefined,
+  canMove: (agent: GeneratedAgentProfile) => boolean,
+  gaveUp: ReadonlySet<GeneratedAgentProfile>,
+): { occupied: Set<string>; stuck: Set<string> } {
+  const occupied = new Set<string>();
+  const stuck = new Set<string>();
+  const immovable = new Set<GeneratedAgentProfile>();
+  for (const holder of agents) {
+    if (!holder.voiceConfig) continue;
+    const key = advertisedVoiceToken(holder.voiceConfig);
+    occupied.add(key);
+    if (!canMove(holder) || gaveUp.has(holder)) {
+      stuck.add(key);
+      immovable.add(holder);
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const holder of agents) {
+      if (immovable.has(holder) || !holder.voiceConfig) continue;
+      const wanted = profileGender(holder);
+      const current = findAdvertisedVoice(
+        advertisedVoiceToken(holder.voiceConfig),
+        availableVoices,
+      );
+      const destination =
+        wanted && current
+          ? pickMatchingGenderVoice(
+              availableVoices,
+              wanted,
+              current.voiceLanguage,
+              usage,
+              reserved,
+              occupied,
+              stuck,
+            )
+          : undefined;
+      if (!destination) {
+        immovable.add(holder);
+        stuck.add(advertisedVoiceToken(holder.voiceConfig));
+        changed = true;
+      }
+    }
+  }
+  return { occupied, stuck };
+}
+
+/**
  * Move agents off an opposite male or female voice when the catalogue has a
  * free voice of their identity gender. Already-matching voices, unknown and
  * neutral genders, and the fixed narrator binding stay put and are not stolen.
  * A failed move keeps the current voice and does not mark it used. Prefer a
  * same-language voice nobody holds, then a same-language voice held only by
- * an agent who is still mismatched, then an other-language voice nobody
- * holds, then any other unused match. A voice is stuck when its holder will
- * not leave.
+ * an agent who can still move, then an other-language voice nobody holds,
+ * then any other unused match. A voice is stuck when its holder will not leave.
  */
 function reconcileOppositeVoiceGenders(
   agents: GeneratedAgentProfile[],
@@ -252,14 +310,14 @@ function reconcileOppositeVoiceGenders(
       const current = findAdvertisedVoice(advertisedVoiceToken(agent.voiceConfig), availableVoices);
       if (!wanted || !current) continue;
 
-      const occupied = new Set<string>();
-      const stuck = new Set<string>();
-      for (const holder of agents) {
-        if (!holder.voiceConfig) continue;
-        const key = advertisedVoiceToken(holder.voiceConfig);
-        occupied.add(key);
-        if (!canMove(holder) || gaveUp.has(holder)) stuck.add(key);
-      }
+      const { occupied, stuck } = voiceHolds(
+        agents,
+        availableVoices,
+        usage,
+        reserved,
+        canMove,
+        gaveUp,
+      );
       const replacement = pickMatchingGenderVoice(
         availableVoices,
         wanted,

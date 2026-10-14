@@ -855,6 +855,65 @@ describe('agent profiles — voice gender', () => {
       (await assign([maleOnXiaoyi, femaleOnYunxi])).map((entry) => entry.voiceConfig?.voiceId),
     ).toEqual(['zh-CN-XiaoxiaoNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaoyiNeural']);
   });
+
+  it('does not steal a same-language voice from a holder who cannot move while another language is free', async () => {
+    // The only male voice is already a match. Female A starts on it too, and
+    // male B holds the English female voice. He has nowhere to go. Taking Jenny
+    // ahead of the free Chinese female voice leaves both of them on Jenny.
+    const voices: NonNullable<AgentProfilesInput['availableVoices']> = [
+      {
+        providerId: 'azure-tts',
+        voiceId: 'en-US-GuyNeural',
+        voiceName: 'Guy',
+        voiceLanguage: 'en-US',
+        gender: 'male',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'en-US-JennyNeural',
+        voiceName: 'Jenny',
+        voiceLanguage: 'en-US',
+        gender: 'female',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-XiaoxiaoNeural',
+        voiceName: '晓晓',
+        voiceLanguage: 'zh-CN',
+        gender: 'female',
+      },
+    ];
+    const azureToken = (voiceId: string) => `azure-tts::${voiceId}`;
+    const agents = await generate(
+      [
+        profile({
+          name: 'Ben',
+          role: 'teacher',
+          voice: azureToken('en-US-GuyNeural'),
+          voiceDesign: { identity: 'middle-aged male teacher', texture: 'warm', delivery: 'calm' },
+        }),
+        profile({
+          name: 'Ana',
+          role: 'student',
+          voice: azureToken('en-US-GuyNeural'),
+          voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+        }),
+        profile({
+          name: 'Sam',
+          role: 'student',
+          voice: azureToken('en-US-JennyNeural'),
+          voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+        }),
+      ],
+      { availableVoices: voices },
+    );
+
+    expect(agents.map((entry) => entry.voiceConfig?.voiceId)).toEqual([
+      'en-US-GuyNeural',
+      'zh-CN-XiaoxiaoNeural',
+      'en-US-JennyNeural',
+    ]);
+  });
 });
 
 describe('agent profiles — localized identity gender field', () => {

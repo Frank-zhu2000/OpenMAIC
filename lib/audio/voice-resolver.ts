@@ -80,10 +80,17 @@ export interface ResolveAgentVoiceOptions {
   /**
    * Agents in the same order as `agentIndex`. When present, a male/female
    * fallback uses a per-gender ordinal and skips configured voices, the
-   * catalogue default reserved for an unbound teacher, and earlier same-gender
+   * lecture voice reserved for an unbound teacher, and earlier same-gender
    * fallbacks. Omit it to keep the index pick.
    */
   roster?: AgentConfig[];
+  /**
+   * Lecture voice an unbound teacher speaks. When it names a voice of the
+   * fallback provider, that id is reserved. Omit it to reserve the catalogue
+   * default, which discussion speaks when the user has not picked a voice.
+   * The agent bar and discussion playback must pass the same value.
+   */
+  globalVoice?: { providerId: string; voiceId: string };
 }
 
 /**
@@ -99,7 +106,7 @@ export interface ResolveAgentVoiceOptions {
  * 2. Otherwise, deterministically pick the first enabled provider. When the
  *    catalogue lists the agent's gender, the pick stays in that male or female
  *    subset. With a roster, that subset uses a per-gender ordinal and skips
- *    configured voices, the catalogue default reserved for an unbound teacher,
+ *    configured voices, the lecture voice reserved for an unbound teacher,
  *    and earlier same-gender fallbacks. Without a roster, or
  *    when that subset is empty (no gender on those voices, or only neutral),
  *    the pick is `agentIndex` modulo the pool. Browser-native is in the pool
@@ -125,7 +132,9 @@ export function resolveAgentVoice(
     enabledProviders,
     agentIndex,
     agentBinaryGender(agent),
-    options?.roster ? { agents: options.roster, overrides } : undefined,
+    options?.roster
+      ? { agents: options.roster, overrides, globalVoice: options.globalVoice }
+      : undefined,
   );
 }
 
@@ -253,16 +262,19 @@ function agentBinaryGender(agent: AgentConfig): 'male' | 'female' | undefined {
  * voices. Neutral voices are not male or female, so a neutral-only catalogue
  * keeps the index pick, the same as a catalogue with no gender data. With a
  * roster, the gendered subset uses a per-gender ordinal and skips configured
- * voice ids, the unbound-teacher catalogue default, and earlier same-gender
- * fallbacks, instead of `index` modulo that subset. A custom global lecture
- * voice is not reserved. Returns null when no enabled provider can serve a
- * voice.
+ * voice ids, the lecture voice reserved for an unbound teacher, and earlier
+ * same-gender fallbacks, instead of `index` modulo that subset. Returns null
+ * when no enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
   enabledProviders: ProviderWithVoices[],
   index: number,
   agentGender?: 'male' | 'female',
-  roster?: { agents: AgentConfig[]; overrides?: AgentVoiceOverrides },
+  roster?: {
+    agents: AgentConfig[];
+    overrides?: AgentVoiceOverrides;
+    globalVoice?: { providerId: string; voiceId: string };
+  },
 ): ResolvedVoice | null {
   if (enabledProviders.length === 0) return null;
   const first = enabledProviders[0];
@@ -294,10 +306,9 @@ function distinctVoiceId(pool: Array<{ id: string }>, used: Set<string>, overflo
 
 /**
  * Catalogue default for this provider (`DEFAULT_TTS_VOICES`). When the enabled
- * model cannot speak that id, the first voice it offers. Discussion plays this
- * for an unbound teacher only when the tts-slot voice is that default; a
- * user-selected global lecture voice is not read here. Undefined for a provider
- * with no built-in default.
+ * model cannot speak that id, the first voice it offers. Used for an unbound
+ * teacher only when the caller did not pass the lecture voice. Undefined for a
+ * provider with no built-in default.
  */
 function providerDefaultVoiceId(provider: ProviderWithVoices | undefined): string | undefined {
   if (!provider) return undefined;
@@ -308,22 +319,48 @@ function providerDefaultVoiceId(provider: ProviderWithVoices | undefined): strin
 }
 
 /**
+ * Voice an unbound teacher speaks on `provider`: the lecture voice when it is
+ * one of that provider's voices, otherwise the catalogue default when the
+ * caller passed no lecture voice. A lecture voice on another provider is not
+ * this catalogue's default, so nothing here is reserved for it.
+ */
+function unboundTeacherReservedVoiceId(
+  provider: ProviderWithVoices | undefined,
+  globalVoice: { providerId: string; voiceId: string } | undefined,
+): string | undefined {
+  if (!provider) return undefined;
+  if (
+    globalVoice &&
+    globalVoice.providerId === provider.providerId &&
+    provider.voices.some((voice) => voice.id === globalVoice.voiceId)
+  ) {
+    return globalVoice.voiceId;
+  }
+  if (globalVoice) return undefined;
+  return providerDefaultVoiceId(provider);
+}
+
+/**
  * Voice for one unbound agent of `agentGender`. Before allocating fallbacks,
  * reserve every configured roster voice (including one that appears later) and
- * the catalogue default for an unbound teacher. That reservation does not
- * consume a fallback slot. Earlier unbound agents of
- * the same gender then take the remaining voices. An unbound teacher does not
- * take a slot, because discussion playback does not speak this fallback for them.
+ * the lecture voice an unbound teacher speaks. That reservation does not
+ * consume a fallback slot. Earlier unbound agents of the same gender then take
+ * the remaining voices. An unbound teacher does not take a slot, because
+ * discussion playback does not speak this fallback for them.
  */
 function distinctGenderVoiceId(
   pool: Array<{ id: string }>,
-  roster: { agents: AgentConfig[]; overrides?: AgentVoiceOverrides },
+  roster: {
+    agents: AgentConfig[];
+    overrides?: AgentVoiceOverrides;
+    globalVoice?: { providerId: string; voiceId: string };
+  },
   index: number,
   agentGender: 'male' | 'female',
   enabledProviders: ProviderWithVoices[],
 ): string {
   const used = new Set<string>();
-  const teacherDefault = providerDefaultVoiceId(enabledProviders[0]);
+  const teacherVoice = unboundTeacherReservedVoiceId(enabledProviders[0], roster.globalVoice);
   for (const other of roster.agents) {
     if (!other) continue;
     const configured = resolveConfiguredAgentVoice(other, enabledProviders, roster.overrides);
@@ -331,7 +368,7 @@ function distinctGenderVoiceId(
       used.add(configured.voiceId);
       continue;
     }
-    if (other.role === 'teacher' && teacherDefault) used.add(teacherDefault);
+    if (other.role === 'teacher' && teacherVoice) used.add(teacherVoice);
   }
   let overflow = 0;
   for (let i = 0; i < index; i++) {

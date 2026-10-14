@@ -309,6 +309,38 @@ describe('resolveAgentVoice gender fallback', () => {
     ).toBe('female-shaonv');
   });
 
+  it('reserves the global lecture voice an unbound teacher speaks, not the catalogue default', () => {
+    const providers = getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+    const females = providers[0].voices
+      .filter((voice) => voice.gender === 'female')
+      .map((voice) => voice.id);
+    expect(females[0]).toBe('female-yujie');
+    expect(females).toContain('female-shaonv');
+    const student = agent({
+      role: 'student',
+      voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+    });
+    const teacher = agent({
+      role: 'teacher',
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+    });
+    expect(teacher.voiceConfig).toBeUndefined();
+    const globalVoice = { providerId: 'minimax-tts' as const, voiceId: 'female-shaonv' };
+    const roster = [student, teacher];
+    // Discussion speaks female-shaonv for this teacher. Reserving female-yujie
+    // lets the student take female-shaonv while other female voices are free.
+    expect(
+      resolveAgentVoice(student, 0, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('female-yujie');
+    const teacherFirst = [teacher, student];
+    expect(
+      resolveAgentVoice(student, 1, providers, undefined, { roster: teacherFirst, globalVoice })
+        ?.voiceId,
+    ).toBe('female-yujie');
+  });
+
   it('does not spend a fallback slot on an unbound teacher without voiceConfig', () => {
     const providers = getEnabledProvidersWithVoices({
       'openai-tts': { apiKey: 'k', enabled: true },

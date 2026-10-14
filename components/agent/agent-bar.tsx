@@ -85,10 +85,16 @@ function AgentVoicePill({
 }) {
   const { t, locale } = useI18n();
   const ttsProvidersConfig = useSlotTTSProvidersConfig();
+  const selection = useTTSSelection();
   const agentVoiceOverrides = useSettingsStore((s) => s.agentVoiceOverrides);
   const setAgentVoiceOverride = useSettingsStore((s) => s.setAgentVoiceOverride);
   const resolved = resolveAgentVoice(agent, agentIndex, availableProviders, agentVoiceOverrides, {
     roster,
+    // Same lecture voice discussion playback passes, so the pill and the
+    // spoken student voice reserve the unbound teacher binding together.
+    globalVoice: selection
+      ? { providerId: selection.providerId, voiceId: selection.voice }
+      : undefined,
   });
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [voiceQuery, setVoiceQuery] = useState('');

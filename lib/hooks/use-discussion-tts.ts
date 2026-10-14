@@ -208,7 +208,14 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const index = agentIndexMap.current.get(agentId!) ?? 0;
       return applyUnavailableBindingFallback(
         agent.id,
-        resolveAgentVoice(agent, index, providers, agentVoiceOverrides, { roster: agents }),
+        resolveAgentVoice(agent, index, providers, agentVoiceOverrides, {
+          roster: agents,
+          // Same lecture voice the teacher branch speaks, so a student fallback
+          // reserves that binding instead of the catalogue default.
+          globalVoice: ttsSelectionValue
+            ? { providerId: globalTtsProviderId, voiceId: globalTtsVoice }
+            : undefined,
+        }),
         globalVoice,
         firstVoice,
       );
@@ -234,6 +241,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       ttsProvidersConfig,
       voiceProfiles,
       browserVoices,
+      ttsSelectionValue,
       globalTtsProviderId,
       globalTtsVoice,
       agentVoiceOverrides,

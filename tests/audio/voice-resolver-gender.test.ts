@@ -7,10 +7,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getEnabledProvidersWithVoices,
+  playbackVoiceAfterUnavailableFallback,
   resolveAgentVoice,
   voicePillPlaybackRoster,
   type ProviderWithVoices,
 } from '@/lib/audio/voice-resolver';
+import {
+  clearUnavailableVoiceBindingsForTests,
+  markVoiceBindingUnavailable,
+} from '@/lib/audio/unavailable-voice-bindings';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 
 function agent(partial: Partial<AgentConfig>): AgentConfig {
@@ -366,6 +371,80 @@ describe('resolveAgentVoice gender fallback', () => {
     );
     expect(voices[0]).toBe('nova');
     expect(voices[2]).toBe('shimmer');
+  });
+
+  it('reserves the lecture voice when a student clone is unavailable', () => {
+    // Playback falls every unavailable binding back onto the lecture voice, including
+    // a student. Reserving only the stored clone leaves Cherry free, so an unbound
+    // female classmate takes Cherry while Serena is still free.
+    const providers = getEnabledProvidersWithVoices({
+      'qwen-tts': { apiKey: 'k', enabled: true },
+    });
+    const clone = { providerId: 'qwen-tts' as const, voiceId: 'qwen-clone-student' };
+    const globalVoice = { providerId: 'qwen-tts' as const, voiceId: 'Cherry' };
+    const teacher = agent({
+      id: 'teacher',
+      role: 'teacher',
+      voiceConfig: { providerId: 'qwen-tts', voiceId: 'Ethan' },
+      voiceDesign: {
+        identity: 'middle-aged male teacher',
+        gender: 'male',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const boundStudent = agent({
+      id: 'bound-student',
+      role: 'student',
+      voiceConfig: { ...clone },
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    });
+    const classmate = agent({
+      id: 'classmate',
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'light',
+        delivery: 'lively',
+      },
+    });
+    const roster = [teacher, boundStudent, classmate];
+    const lectureEnabled = providers.some(
+      (provider) => provider.providerId === globalVoice.providerId,
+    );
+    clearUnavailableVoiceBindingsForTests();
+    markVoiceBindingUnavailable(clone);
+    try {
+      const played = playbackVoiceAfterUnavailableFallback(
+        clone,
+        globalVoice,
+        () => {
+          const first = providers[0]?.voices[0];
+          return first ? { providerId: providers[0].providerId, voiceId: first.id } : null;
+        },
+        lectureEnabled,
+      );
+      expect(played?.voiceId).toBe('Cherry');
+      expect(
+        resolveAgentVoice(teacher, 0, providers, undefined, { roster, globalVoice })?.voiceId,
+      ).toBe('Ethan');
+      expect(
+        resolveAgentVoice(boundStudent, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+      ).toBe(clone.voiceId);
+      expect(
+        resolveAgentVoice(classmate, 2, providers, undefined, { roster, globalVoice })?.voiceId,
+      ).toBe('Serena');
+      expect(boundStudent.voiceConfig).toEqual(clone);
+      expect(classmate.voiceConfig).toBeUndefined();
+    } finally {
+      clearUnavailableVoiceBindingsForTests();
+    }
   });
 });
 

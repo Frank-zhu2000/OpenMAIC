@@ -263,8 +263,9 @@ function agentBinaryGender(agent: AgentConfig): 'male' | 'female' | undefined {
  * voices. Neutral voices are not male or female, so a neutral-only catalogue
  * keeps the index pick, the same as a catalogue with no gender data. With a
  * roster, the gendered subset uses a per-gender ordinal and skips configured
- * voice ids, the lecture voice reserved for an unbound teacher, and earlier
- * same-gender fallbacks, instead of `index` modulo that subset. Returns null
+ * voice ids, the lecture voice reserved for an unbound teacher, the voice an
+ * unavailable binding actually plays, and earlier same-gender fallbacks, instead
+ * of `index` modulo that subset. Returns null
  * when no enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
@@ -360,16 +361,15 @@ function unboundTeacherReservedVoiceId(
 }
 
 /**
- * Voice id playback substitutes for a teacher's unavailable stored binding, when
- * that voice belongs to the catalogue this fallback allocates from.
+ * Voice id playback substitutes for an unavailable stored binding, when that
+ * voice belongs to the catalogue this fallback allocates from. Discussion
+ * playback applies this fallback to every agent, so students reserve it too.
  */
-function unavailableTeacherPlaybackVoiceId(
-  agent: AgentConfig,
+function unavailableBindingPlaybackVoiceId(
   configured: ResolvedVoice,
   enabledProviders: ProviderWithVoices[],
   globalVoice: { providerId: string; voiceId: string } | undefined,
 ): string | undefined {
-  if (agent.role !== 'teacher') return undefined;
   const provider = enabledProviders[0];
   if (!provider) return undefined;
   const lecture = globalVoice
@@ -401,9 +401,10 @@ function unavailableTeacherPlaybackVoiceId(
 /**
  * Voice for one unbound agent of `agentGender`. Before allocating fallbacks,
  * reserve every configured roster voice (including one that appears later) and
- * the lecture voice an unbound teacher speaks. A teacher whose stored binding
- * playback has marked unavailable still keeps that binding, but allocation
- * reserves the voice playback speaks after the unavailable-binding fallback.
+ * the lecture voice an unbound teacher speaks. A roster agent whose stored
+ * binding playback has marked unavailable still keeps that binding, but
+ * allocation reserves the voice playback speaks after the unavailable-binding
+ * fallback.
  * That reservation does not consume a fallback slot. Earlier unbound agents of
  * the same gender then take the remaining voices. An unbound teacher does not
  * take a slot, because discussion playback does not speak this fallback for them.
@@ -426,8 +427,7 @@ function distinctGenderVoiceId(
     const configured = resolveConfiguredAgentVoice(other, enabledProviders, roster.overrides);
     if (configured) {
       used.add(configured.voiceId);
-      const played = unavailableTeacherPlaybackVoiceId(
-        other,
+      const played = unavailableBindingPlaybackVoiceId(
         configured,
         enabledProviders,
         roster.globalVoice,

@@ -656,6 +656,86 @@ describe('discussion TTS unavailable teacher clone', () => {
       providers['qwen-tts'].enabled = previous.qwenEnabled;
     }
   });
+
+  it('plays Cherry for the teacher and Serena for a student sealed before the clone is reported missing', async () => {
+    // Seal the student while the teacher's clone request is still in flight.
+    // The clone is marked unavailable only after that request returns
+    // QWEN_VC_VOICE_NOT_FOUND. The teacher then plays Cherry. The student must
+    // be resolved again onto Serena instead of keeping Cherry.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const providers = mocks.settings.ttsProvidersConfig;
+    const previous = {
+      providerId: selection.providerId,
+      voice: selection.voice,
+      openaiEnabled: providers['openai-tts'].enabled,
+      browserEnabled: providers['browser-native-tts'].enabled,
+      qwenEnabled: providers['qwen-tts'].enabled,
+    };
+    const clone = { providerId: 'qwen-tts' as const, voiceId: 'qwen-clone-teacher' };
+    const teacherAgent = {
+      id: 'teacher',
+      role: 'teacher',
+      voiceConfig: { ...clone },
+      voiceDesign: {
+        identity: 'middle-aged female teacher',
+        gender: 'female',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    } as AgentConfig;
+    const student = {
+      id: 'student',
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    } as AgentConfig;
+    try {
+      selection.providerId = 'qwen-tts';
+      selection.voice = 'Cherry';
+      providers['openai-tts'].enabled = false;
+      providers['browser-native-tts'].enabled = false;
+      providers['qwen-tts'].enabled = true;
+      agents = [teacherAgent, student];
+      act(() => root.render(createElement(Probe)));
+
+      await seal('teacher-line', 'teacher');
+      await seal('student-line', 'student');
+      expect(requests.map((request) => [request.body.audioId, request.body.ttsVoice])).toEqual([
+        ['teacher-line', clone.voiceId],
+      ]);
+
+      await act(async () =>
+        requests[0].response.resolve(
+          Response.json(
+            { error: 'Missing clone', errorCode: 'QWEN_VC_VOICE_NOT_FOUND' },
+            { status: 404 },
+          ),
+        ),
+      );
+      expect(requests.map((request) => [request.body.audioId, request.body.ttsVoice])).toEqual([
+        ['teacher-line', clone.voiceId],
+        ['teacher-line', 'Cherry'],
+      ]);
+
+      await respond(1, { base64: btoa('teacher-cherry'), format: 'mp3' });
+      expect(FakeAudio.instances[0].src).toContain(btoa('teacher-cherry'));
+      expect(requests[2]?.body).toMatchObject({ audioId: 'student-line', ttsVoice: 'Serena' });
+      await respond(2, { base64: btoa('student-serena'), format: 'mp3' });
+      await act(async () => FakeAudio.instances[0].end());
+      expect(FakeAudio.instances[0].src).toContain(btoa('student-serena'));
+      expect(teacherAgent.voiceConfig).toEqual(clone);
+    } finally {
+      selection.providerId = previous.providerId;
+      selection.voice = previous.voice;
+      providers['openai-tts'].enabled = previous.openaiEnabled;
+      providers['browser-native-tts'].enabled = previous.browserEnabled;
+      providers['qwen-tts'].enabled = previous.qwenEnabled;
+    }
+  });
 });
 
 /**

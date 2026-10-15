@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getEnabledProvidersWithVoices,
+  getSelectableProvidersWithVoices,
   playbackVoiceAfterUnavailableFallback,
   resolveAgentVoice,
   voicePillPlaybackRoster,
@@ -1052,5 +1053,162 @@ describe('resolveAgentVoice localized gender field', () => {
     expect(resolveAgentVoice(second, 1, providers, undefined, { roster })?.voiceId).toBe(
       'female-shaonv',
     );
+  });
+});
+
+describe('browser-native lecture voice missing from the dynamic list', () => {
+  function browserProviders(
+    voices: Array<{ voiceURI: string; name: string; lang?: string; default?: boolean }>,
+  ): ProviderWithVoices[] {
+    return getSelectableProvidersWithVoices(
+      { 'browser-native-tts': { enabled: true } },
+      [],
+      voices,
+    );
+  }
+
+  it('does not give the first unbound student the voice a "default" sentinel speaks', () => {
+    // No lang tags: the sentinel falls through language matching to the
+    // flagged default, which is also first.
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', default: true },
+      { voiceURI: 'uri-zira', name: 'Zira' },
+    ]);
+    expect(providers[0]?.voices[0]).toMatchObject({ id: 'uri-david', default: true });
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const student = agent({ id: 'student', role: 'student' });
+    const roster = [teacher, student];
+    const globalVoice = { providerId: 'browser-native-tts' as const, voiceId: 'default' };
+    expect(
+      resolveAgentVoice(student, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-zira');
+  });
+
+  it('does not give the first unbound student the voice a stale browser URI speaks', () => {
+    // No lang tags and no default flag: a missing URI falls through to the
+    // first dynamic voice.
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David' },
+      { voiceURI: 'uri-zira', name: 'Zira' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const student = agent({ id: 'student', role: 'student' });
+    const roster = [teacher, student];
+    const globalVoice = {
+      providerId: 'browser-native-tts' as const,
+      voiceId: 'com.apple.voice.compact.gone',
+    };
+    expect(
+      resolveAgentVoice(student, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-zira');
+  });
+
+  it('reserves a later marked browser default instead of the first dynamic voice', () => {
+    // No lang tags: a later default===true wins over index 0. Reserving Zira
+    // would give David to the first student.
+    const providers = browserProviders([
+      { voiceURI: 'uri-zira', name: 'Zira' },
+      { voiceURI: 'uri-david', name: 'David', default: true },
+      { voiceURI: 'uri-mark', name: 'Mark' },
+    ]);
+    expect(providers[0]?.voices.find((voice) => voice.default)?.id).toBe('uri-david');
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const first = agent({ id: 'student-1', role: 'student' });
+    const second = agent({ id: 'student-2', role: 'student' });
+    const roster = [teacher, first, second];
+    const globalVoice = { providerId: 'browser-native-tts' as const, voiceId: 'default' };
+    expect(
+      resolveAgentVoice(first, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-zira');
+    expect(
+      resolveAgentVoice(second, 2, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-mark');
+  });
+
+  it('keeps browser voice lang on the selectable catalogue', () => {
+    const providers = browserProviders([
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+    ]);
+    expect(providers[0]?.voices[0]).toMatchObject({ id: 'uri-xiaoxiao', lang: 'zh-CN' });
+  });
+
+  it('reserves an in-list browser URI as itself', () => {
+    // David is in the list. A later zh-CN voice must not replace that id,
+    // or the first student would receive David.
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', lang: 'en-US', default: true },
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+      { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const student = agent({ id: 'student', role: 'student' });
+    const roster = [teacher, student];
+    const globalVoice = { providerId: 'browser-native-tts' as const, voiceId: 'uri-david' };
+    expect(
+      resolveAgentVoice(student, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-xiaoxiao');
+  });
+
+  it('does not reserve a browser voice for a lecture voice on another provider', () => {
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', lang: 'en-US', default: true },
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+      { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const first = agent({ id: 'student-1', role: 'student' });
+    const second = agent({ id: 'student-2', role: 'student' });
+    const roster = [teacher, first, second];
+    const globalVoice = { providerId: 'openai-tts' as const, voiceId: 'nova' };
+    expect(
+      resolveAgentVoice(first, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-david');
+    expect(
+      resolveAgentVoice(second, 2, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-xiaoxiao');
+  });
+
+  it('reserves the zh-CN voice a sentinel speaks when that voice is neither default nor first', () => {
+    // Discussion speaks zh-CN for the sentinel. Xiaoxiao is that voice.
+    // The first student must not receive it; the second takes Zira, so
+    // Xiaoxiao stays reserved.
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', lang: 'en-US', default: true },
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+      { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const first = agent({ id: 'student-1', role: 'student' });
+    const second = agent({ id: 'student-2', role: 'student' });
+    const roster = [teacher, first, second];
+    const globalVoice = { providerId: 'browser-native-tts' as const, voiceId: 'default' };
+    expect(
+      resolveAgentVoice(first, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-david');
+    expect(
+      resolveAgentVoice(second, 2, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-zira');
+  });
+
+  it('reserves the zh-CN voice a stale browser URI speaks when that voice is neither default nor first', () => {
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', lang: 'en-US', default: true },
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+      { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const first = agent({ id: 'student-1', role: 'student' });
+    const second = agent({ id: 'student-2', role: 'student' });
+    const roster = [teacher, first, second];
+    const globalVoice = {
+      providerId: 'browser-native-tts' as const,
+      voiceId: 'com.apple.voice.compact.gone',
+    };
+    expect(
+      resolveAgentVoice(first, 1, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-david');
+    expect(
+      resolveAgentVoice(second, 2, providers, undefined, { roster, globalVoice })?.voiceId,
+    ).toBe('uri-zira');
   });
 });

@@ -15,6 +15,8 @@ import {
   voicePillPlaybackRoster,
 } from '@/lib/audio/voice-resolver';
 import { playBrowserTTSPreview } from '@/lib/audio/browser-tts-preview';
+import { BROWSER_TTS_DEFAULT_LANG, resolveUnmatchedBrowserVoice } from '@/lib/audio/browser-voice';
+import { BROWSER_NATIVE_TTS_PROVIDER_ID } from '@/lib/audio/provider-enablement';
 import { useAllVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { resolveAgentVoiceOptions } from '@/lib/audio/agent-voice';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
@@ -95,6 +97,8 @@ function AgentVoicePill({
     globalVoice: selection
       ? { providerId: selection.providerId, voiceId: selection.voice }
       : undefined,
+    // Same utterance lang discussion playback assigns in useBrowserTTS.
+    utteranceLang: BROWSER_TTS_DEFAULT_LANG,
   });
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [voiceQuery, setVoiceQuery] = useState('');
@@ -369,6 +373,21 @@ function TeacherVoicePill({
   const selection = useTTSSelection();
   const ttsProviderId = selection?.providerId;
   const ttsVoice = selection?.voice;
+  // Sentinel or stale browser URI: the pill names the voice playback speaks.
+  const spokenBrowserVoiceId = (() => {
+    if (ttsProviderId !== BROWSER_NATIVE_TTS_PROVIDER_ID) return undefined;
+    const provider = availableProviders.find((entry) => entry.providerId === ttsProviderId);
+    if (!provider || provider.voices.some((voice) => voice.id === ttsVoice)) return undefined;
+    return resolveUnmatchedBrowserVoice(
+      provider.voices.map((voice) => ({
+        voiceURI: voice.id,
+        name: voice.name,
+        lang: voice.lang,
+        default: voice.default,
+      })),
+      BROWSER_TTS_DEFAULT_LANG,
+    )?.voiceURI;
+  })();
   const setTTSVoice = useSettingsStore((s) => s.setTTSVoice);
   const ttsProvidersConfig = useSlotTTSProvidersConfig();
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -390,7 +409,8 @@ function TeacherVoicePill({
     if (availableProviders.length === 0) return t('agentBar.noVoice');
     for (const p of availableProviders) {
       if (p.providerId === ttsProviderId) {
-        const v = p.voices.find((voice) => voice.id === ttsVoice);
+        const selectedId = spokenBrowserVoiceId ?? ttsVoice;
+        const v = p.voices.find((voice) => voice.id === selectedId);
         if (v) return v.id === VOXCPM_AUTO_VOICE_ID ? t('settings.voxcpmAutoVoice') : v.name;
       }
     }
@@ -548,7 +568,9 @@ function TeacherVoicePill({
                     : provider.providerName}
                 </div>
                 {group.voices.map((voice) => {
-                  const isActive = ttsProviderId === provider.providerId && ttsVoice === voice.id;
+                  const isActive =
+                    ttsProviderId === provider.providerId &&
+                    (ttsVoice === voice.id || spokenBrowserVoiceId === voice.id);
                   const previewKey = `${provider.providerId}::${voice.id}`;
                   const isPreviewing = previewingId === previewKey;
                   const canPreview = !isNonPreviewableVoice(provider.providerId, voice.id);

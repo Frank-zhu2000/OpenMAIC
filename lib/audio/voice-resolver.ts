@@ -22,6 +22,7 @@ import {
   voxCPMBackendSupportsReferenceAudio,
 } from '@/lib/audio/voxcpm';
 import { isVoiceBindingUnavailable } from '@/lib/audio/unavailable-voice-bindings';
+import { BROWSER_TTS_DEFAULT_LANG, resolveUnmatchedBrowserVoice } from '@/lib/audio/browser-voice';
 
 export interface ResolvedVoice {
   providerId: TTSProviderId;
@@ -95,6 +96,13 @@ export interface ResolveAgentVoiceOptions {
    * The agent bar and discussion playback must pass the same value.
    */
   globalVoice?: { providerId: string; voiceId: string };
+  /**
+   * BCP-47 lang browser speech puts on the utterance. A missing browser
+   * lecture id is reserved as the voice that lang selects. Omit it to use
+   * the useBrowserTTS default. The agent bar and discussion must pass the
+   * same value the speaker uses.
+   */
+  utteranceLang?: string;
 }
 
 /**
@@ -139,7 +147,12 @@ export function resolveAgentVoice(
     agentIndex,
     agentBinaryGender(agent),
     options?.roster
-      ? { agents: options.roster, overrides, globalVoice: options.globalVoice }
+      ? {
+          agents: options.roster,
+          overrides,
+          globalVoice: options.globalVoice,
+          utteranceLang: options.utteranceLang,
+        }
       : undefined,
   );
 }
@@ -283,6 +296,7 @@ export function resolveDeterministicFallbackVoice(
     agents: AgentConfig[];
     overrides?: AgentVoiceOverrides;
     globalVoice?: { providerId: string; voiceId: string };
+    utteranceLang?: string;
   },
 ): ResolvedVoice | null {
   return resolveDeterministicFallbackVoiceCached(
@@ -303,6 +317,7 @@ function resolveDeterministicFallbackVoiceCached(
         agents: AgentConfig[];
         overrides?: AgentVoiceOverrides;
         globalVoice?: { providerId: string; voiceId: string };
+        utteranceLang?: string;
       }
     | undefined,
   memo: Map<string, ResolvedVoice | null>,
@@ -380,22 +395,34 @@ export function playbackVoiceAfterUnavailableFallback<
 }
 
 /**
- * Voice an unbound teacher speaks on `provider`: the lecture voice when it is
- * one of that provider's voices, otherwise the catalogue default when the
- * caller passed no lecture voice. A lecture voice on another provider is not
- * this catalogue's default, so nothing here is reserved for it.
+ * Voice an unbound teacher speaks on `provider`. The lecture voice when that
+ * id is offered. A same-provider browser id that is not offered reserves the
+ * voice playback assigns for that utterance lang. A stale server voice
+ * reserves nothing. A lecture voice on another provider reserves nothing.
+ * With no lecture voice, the catalogue default is reserved.
  */
 function unboundTeacherReservedVoiceId(
   provider: ProviderWithVoices | undefined,
   globalVoice: { providerId: string; voiceId: string } | undefined,
+  utteranceLang: string = BROWSER_TTS_DEFAULT_LANG,
 ): string | undefined {
   if (!provider) return undefined;
-  if (
-    globalVoice &&
-    globalVoice.providerId === provider.providerId &&
-    provider.voices.some((voice) => voice.id === globalVoice.voiceId)
-  ) {
-    return globalVoice.voiceId;
+  if (globalVoice?.providerId === provider.providerId) {
+    if (provider.voices.some((voice) => voice.id === globalVoice.voiceId)) {
+      return globalVoice.voiceId;
+    }
+    if (provider.providerId === BROWSER_NATIVE_TTS_PROVIDER_ID) {
+      return resolveUnmatchedBrowserVoice(
+        provider.voices.map((voice) => ({
+          voiceURI: voice.id,
+          name: voice.name,
+          lang: voice.lang,
+          default: voice.default,
+        })),
+        utteranceLang,
+      )?.voiceURI;
+    }
+    return undefined;
   }
   if (globalVoice) return undefined;
   return providerDefaultVoiceId(provider);
@@ -441,6 +468,7 @@ type FallbackRoster = {
   agents: AgentConfig[];
   overrides?: AgentVoiceOverrides;
   globalVoice?: { providerId: string; voiceId: string };
+  utteranceLang?: string;
 };
 
 /**
@@ -469,7 +497,11 @@ function reservedRosterVoiceIds(
 ): Set<string> {
   const used = new Set<string>();
   const fallbackProviderId = enabledProviders[0]?.providerId;
-  const teacherVoice = unboundTeacherReservedVoiceId(enabledProviders[0], roster.globalVoice);
+  const teacherVoice = unboundTeacherReservedVoiceId(
+    enabledProviders[0],
+    roster.globalVoice,
+    roster.utteranceLang,
+  );
   for (const other of roster.agents) {
     if (!other) continue;
     const configured = reservationConfiguredVoice(other, enabledProviders, roster.overrides);
@@ -694,6 +726,13 @@ export interface ProviderWithVoices {
      * explicit value, not a missing field.
      */
     gender?: 'male' | 'female' | 'neutral';
+    /** Browser-native BCP-47 tag. Absent on server catalogues. */
+    lang?: string;
+    /**
+     * Browser-native SpeechSynthesisVoice.default. Used after language
+     * matching fails. Absent on server catalogues.
+     */
+    default?: boolean;
   }>;
   modelGroups: ModelVoiceGroup[]; // voices grouped by model
 }
@@ -861,6 +900,10 @@ export function getEnabledProvidersWithVoices(
 export interface BrowserVoiceLike {
   voiceURI: string;
   name: string;
+  /** BCP-47 tag from SpeechSynthesisVoice.lang, when the browser exposes it. */
+  lang?: string;
+  /** SpeechSynthesisVoice.default. Set when the browser exposes its default. */
+  default?: boolean;
 }
 
 /**
@@ -893,7 +936,12 @@ export function getSelectableProvidersWithVoices(
     ) &&
     browserVoices.length > 0
   ) {
-    const voices = browserVoices.map((v) => ({ id: v.voiceURI, name: v.name }));
+    const voices = browserVoices.map((v) => ({
+      id: v.voiceURI,
+      name: v.name,
+      ...(v.lang ? { lang: v.lang } : {}),
+      ...(v.default ? { default: true } : {}),
+    }));
     providers.push({
       providerId: BROWSER_NATIVE_TTS_PROVIDER_ID,
       providerName: 'Browser Native',

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useTTSSelection } from '@/lib/audio/use-tts-selection';
 import { slotTTSProvidersConfig } from '@/lib/audio/tts-selection';
+import { BROWSER_TTS_DEFAULT_LANG } from '@/lib/audio/browser-voice';
 import { useBrowserTTS } from '@/lib/hooks/use-browser-tts';
 import {
   playbackVoiceAfterUnavailableFallback,
@@ -109,6 +110,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     cancel: browserCancel,
   } = useBrowserTTS({
     rate: ttsSpeed,
+    lang: BROWSER_TTS_DEFAULT_LANG,
     onEnd: () => {
       if (currentProviderRef.current !== 'browser-native-tts' || !isPlayingRef.current) return;
       currentItemRef.current = null;
@@ -216,6 +218,8 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
           globalVoice: ttsSelectionValue
             ? { providerId: globalTtsProviderId, voiceId: globalTtsVoice }
             : undefined,
+          // Same utterance lang useBrowserTTS assigns above.
+          utteranceLang: BROWSER_TTS_DEFAULT_LANG,
         }),
         globalVoice,
         firstVoice,

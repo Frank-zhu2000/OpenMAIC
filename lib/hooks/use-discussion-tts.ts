@@ -6,6 +6,7 @@ import { useTTSSelection } from '@/lib/audio/use-tts-selection';
 import { slotTTSProvidersConfig } from '@/lib/audio/tts-selection';
 import { useBrowserTTS } from '@/lib/hooks/use-browser-tts';
 import {
+  playbackVoiceAfterUnavailableFallback,
   resolveAgentVoice,
   resolveNarratorVoiceBinding,
   getSelectableProvidersWithVoices,
@@ -25,7 +26,6 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { isQwenCloneVoice, resolveTTSModelForVoice } from '@/lib/audio/constants';
 import { toast } from 'sonner';
 import {
-  isVoiceBindingUnavailable,
   markVoiceBindingNoticeShown,
   markVoiceBindingUnavailable,
   trackAssignedVoiceBinding,
@@ -230,10 +230,12 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         const previousKey = agentBindingKeysRef.current.get(id);
         const key = trackAssignedVoiceBinding(previousKey, preferred);
         agentBindingKeysRef.current.set(id, key);
-        if (!isVoiceBindingUnavailable(preferred)) return preferred;
-        return isTTSProviderEnabled(fallback.providerId, ttsProvidersConfig[fallback.providerId])
-          ? fallback
-          : getFirstVoice();
+        return playbackVoiceAfterUnavailableFallback(
+          preferred,
+          fallback,
+          getFirstVoice,
+          isTTSProviderEnabled(fallback.providerId, ttsProvidersConfig[fallback.providerId]),
+        );
       }
     },
     [

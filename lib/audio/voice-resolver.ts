@@ -21,6 +21,7 @@ import {
   normalizeVoxCPMBackend,
   voxCPMBackendSupportsReferenceAudio,
 } from '@/lib/audio/voxcpm';
+import { isVoiceBindingUnavailable } from '@/lib/audio/unavailable-voice-bindings';
 
 export interface ResolvedVoice {
   providerId: TTSProviderId;
@@ -319,6 +320,24 @@ function providerDefaultVoiceId(provider: ProviderWithVoices | undefined): strin
 }
 
 /**
+ * Binding discussion playback speaks once `preferred` is marked unavailable.
+ * The stored binding is not changed. Callers pass the same lecture voice and
+ * the same provider-enabled check the discussion hook uses, so the picker,
+ * playback, and fallback allocation stay on one voice.
+ */
+export function playbackVoiceAfterUnavailableFallback<
+  T extends { providerId: string; voiceId: string },
+>(
+  preferred: T,
+  fallback: T,
+  firstVoice: () => T | null,
+  fallbackProviderEnabled: boolean,
+): T | null {
+  if (!isVoiceBindingUnavailable(preferred)) return preferred;
+  return fallbackProviderEnabled ? fallback : firstVoice();
+}
+
+/**
  * Voice an unbound teacher speaks on `provider`: the lecture voice when it is
  * one of that provider's voices, otherwise the catalogue default when the
  * caller passed no lecture voice. A lecture voice on another provider is not
@@ -341,12 +360,53 @@ function unboundTeacherReservedVoiceId(
 }
 
 /**
+ * Voice id playback substitutes for a teacher's unavailable stored binding, when
+ * that voice belongs to the catalogue this fallback allocates from.
+ */
+function unavailableTeacherPlaybackVoiceId(
+  agent: AgentConfig,
+  configured: ResolvedVoice,
+  enabledProviders: ProviderWithVoices[],
+  globalVoice: { providerId: string; voiceId: string } | undefined,
+): string | undefined {
+  if (agent.role !== 'teacher') return undefined;
+  const provider = enabledProviders[0];
+  if (!provider) return undefined;
+  const lecture = globalVoice
+    ? { providerId: globalVoice.providerId, voiceId: globalVoice.voiceId }
+    : configured;
+  const lectureEnabled =
+    !!globalVoice && enabledProviders.some((entry) => entry.providerId === globalVoice.providerId);
+  const effective = playbackVoiceAfterUnavailableFallback(
+    configured,
+    lecture,
+    () => {
+      const first = provider.voices[0];
+      return first ? { providerId: provider.providerId, voiceId: first.id } : null;
+    },
+    lectureEnabled,
+  );
+  // The stored id is reserved by the caller. Only the substituted lecture voice
+  // needs a second slot, and only when it belongs to this catalogue.
+  if (
+    !effective ||
+    effective.providerId !== provider.providerId ||
+    effective.voiceId === configured.voiceId
+  ) {
+    return undefined;
+  }
+  return effective.voiceId;
+}
+
+/**
  * Voice for one unbound agent of `agentGender`. Before allocating fallbacks,
  * reserve every configured roster voice (including one that appears later) and
- * the lecture voice an unbound teacher speaks. That reservation does not
- * consume a fallback slot. Earlier unbound agents of the same gender then take
- * the remaining voices. An unbound teacher does not take a slot, because
- * discussion playback does not speak this fallback for them.
+ * the lecture voice an unbound teacher speaks. A teacher whose stored binding
+ * playback has marked unavailable still keeps that binding, but allocation
+ * reserves the voice playback speaks after the unavailable-binding fallback.
+ * That reservation does not consume a fallback slot. Earlier unbound agents of
+ * the same gender then take the remaining voices. An unbound teacher does not
+ * take a slot, because discussion playback does not speak this fallback for them.
  */
 function distinctGenderVoiceId(
   pool: Array<{ id: string }>,
@@ -366,6 +426,13 @@ function distinctGenderVoiceId(
     const configured = resolveConfiguredAgentVoice(other, enabledProviders, roster.overrides);
     if (configured) {
       used.add(configured.voiceId);
+      const played = unavailableTeacherPlaybackVoiceId(
+        other,
+        configured,
+        enabledProviders,
+        roster.globalVoice,
+      );
+      if (played) used.add(played);
       continue;
     }
     if (other.role === 'teacher' && teacherVoice) used.add(teacherVoice);

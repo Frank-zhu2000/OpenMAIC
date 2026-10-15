@@ -210,8 +210,10 @@ function hasOppositeVoiceGender(
 /**
  * Voices currently held, and those a holder will not leave. A mismatched
  * holder with no destination is stuck before they try, so their voice is not
- * taken ahead of a free one. Repeat until a holder whose only hope was that
- * voice is stuck too.
+ * taken ahead of a free one. When several movable holders would claim the same
+ * sole destination, earlier holders reserve it in this pass so later ones are
+ * stuck if they have no alternative. Repeat until a holder whose only hope was
+ * that voice is stuck too.
  */
 function voiceHolds(
   agents: GeneratedAgentProfile[],
@@ -237,6 +239,10 @@ function voiceHolds(
   let changed = true;
   while (changed) {
     changed = false;
+    // Movable holders that share one sole destination must not all look free to
+    // leave: earlier holders claim that destination for this pass so later ones
+    // are stuck when they have no alternative.
+    const claimedDestinations = new Map<string, number>();
     for (const holder of agents) {
       if (immovable.has(holder) || !holder.voiceConfig) continue;
       const wanted = profileGender(holder);
@@ -244,13 +250,17 @@ function voiceHolds(
         advertisedVoiceToken(holder.voiceConfig),
         availableVoices,
       );
+      const usageWithClaims = new Map(usage);
+      for (const [key, count] of claimedDestinations) {
+        usageWithClaims.set(key, (usageWithClaims.get(key) ?? 0) + count);
+      }
       const destination =
         wanted && current
           ? pickMatchingGenderVoice(
               availableVoices,
               wanted,
               current.voiceLanguage,
-              usage,
+              usageWithClaims,
               reserved,
               occupied,
               stuck,
@@ -260,6 +270,9 @@ function voiceHolds(
         immovable.add(holder);
         stuck.add(advertisedVoiceToken(holder.voiceConfig));
         changed = true;
+      } else {
+        const destKey = advertisedVoiceToken(destination);
+        claimedDestinations.set(destKey, (claimedDestinations.get(destKey) ?? 0) + 1);
       }
     }
   }

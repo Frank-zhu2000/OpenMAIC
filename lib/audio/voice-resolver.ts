@@ -406,8 +406,11 @@ function unavailableBindingPlaybackVoiceId(
  * allocation reserves the voice playback speaks after the unavailable-binding
  * fallback.
  * That reservation does not consume a fallback slot. Earlier unbound agents of
- * the same gender then take the remaining voices. An unbound teacher does not
- * take a slot, because discussion playback does not speak this fallback for them.
+ * the same gender then take the remaining voices. An earlier unbound agent with
+ * no recognizable gender (or another gender) still reserves the deterministic
+ * fallback it actually selected when that id is in this pool. An unbound teacher
+ * does not take a slot, because discussion playback does not speak this fallback
+ * for them.
  */
 function distinctGenderVoiceId(
   pool: Array<{ id: string }>,
@@ -443,9 +446,19 @@ function distinctGenderVoiceId(
     if (!earlier) continue;
     if (resolveConfiguredAgentVoice(earlier, enabledProviders, roster.overrides)) continue;
     if (earlier.role === 'teacher') continue;
-    if (agentBinaryGender(earlier) !== agentGender) continue;
-    used.add(distinctVoiceId(pool, used, overflow));
-    overflow += 1;
+    const earlierGender = agentBinaryGender(earlier);
+    if (earlierGender === agentGender) {
+      used.add(distinctVoiceId(pool, used, overflow));
+      overflow += 1;
+      continue;
+    }
+    // Ungendered (or other-gender) predecessors still take a deterministic
+    // fallback. Reserve that id when it lands in this gender pool so a later
+    // same-gender agent does not collide with it.
+    const taken = resolveDeterministicFallbackVoice(enabledProviders, i, earlierGender, roster);
+    if (taken && pool.some((voice) => voice.id === taken.voiceId)) {
+      used.add(taken.voiceId);
+    }
   }
   return distinctVoiceId(pool, used, overflow);
 }

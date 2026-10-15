@@ -856,6 +856,87 @@ describe('agent profiles — voice gender', () => {
     ).toEqual(['zh-CN-XiaoxiaoNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaoyiNeural']);
   });
 
+  it('does not leave duplicate voices when multiple movable holders contend for one destination', async () => {
+    // Codex P2: Ben matches on Yunxi. Ana (female) shares that zh male voice, so
+    // her preferred language is zh. Mike and Sam (males) sit on zh female voices.
+    // Only Yunjian is a free male. Without contention-aware reservation both
+    // males look movable; Ana steals a zh female (rank 1) ahead of Jenny (rank 2);
+    // the earlier male takes Yunjian; the later male stays on the stolen id →
+    // duplicate while Jenny is free.
+    const voices: NonNullable<AgentProfilesInput['availableVoices']> = [
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-YunxiNeural',
+        voiceName: '云希',
+        voiceLanguage: 'zh-CN',
+        gender: 'male',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-XiaoyiNeural',
+        voiceName: '晓伊',
+        voiceLanguage: 'zh-CN',
+        gender: 'female',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-XiaoxiaoNeural',
+        voiceName: '晓晓',
+        voiceLanguage: 'zh-CN',
+        gender: 'female',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'zh-CN-YunjianNeural',
+        voiceName: '云健',
+        voiceLanguage: 'zh-CN',
+        gender: 'male',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'en-US-JennyNeural',
+        voiceName: 'Jenny',
+        voiceLanguage: 'en-US',
+        gender: 'female',
+      },
+    ];
+    const azureToken = (voiceId: string) => `azure-tts::${voiceId}`;
+    const agents = await generate(
+      [
+        profile({
+          name: 'Ben',
+          role: 'teacher',
+          voice: azureToken('zh-CN-YunxiNeural'),
+          voiceDesign: { identity: 'middle-aged male teacher', texture: 'warm', delivery: 'calm' },
+        }),
+        profile({
+          name: 'Ana',
+          role: 'student',
+          voice: azureToken('zh-CN-YunxiNeural'),
+          voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+        }),
+        profile({
+          name: 'Mike',
+          role: 'student',
+          voice: azureToken('zh-CN-XiaoxiaoNeural'),
+          voiceDesign: { identity: 'young male student', texture: 'light', delivery: 'lively' },
+        }),
+        profile({
+          name: 'Sam',
+          role: 'student',
+          voice: azureToken('zh-CN-XiaoyiNeural'),
+          voiceDesign: { identity: 'young male student', texture: 'soft', delivery: 'calm' },
+        }),
+      ],
+      { availableVoices: voices },
+    );
+
+    const ids = agents.map((entry) => entry.voiceConfig?.voiceId);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids[0]).toBe('zh-CN-YunxiNeural');
+    expect(ids).toContain('zh-CN-YunjianNeural');
+  });
+
   it('does not steal a same-language voice from a holder who cannot move while another language is free', async () => {
     // The only male voice is already a match. Female A starts on it too, and
     // male B holds the English female voice. He has nowhere to go. Taking Jenny

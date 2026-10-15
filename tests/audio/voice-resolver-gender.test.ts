@@ -446,6 +446,35 @@ describe('resolveAgentVoice gender fallback', () => {
       clearUnavailableVoiceBindingsForTests();
     }
   });
+
+  it('reserves the index fallback an ungendered predecessor already took', () => {
+    // Codex P2: teacher on female-yujie, ungendered student at index 1 takes
+    // male-qn-jingying (full-pool index pick). A later male must not also get
+    // male-qn-jingying while Chinese (Mandarin)_Gentleman is free.
+    const providers = getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+    const teacher = agent({
+      role: 'teacher',
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+      voiceConfig: { providerId: 'minimax-tts', voiceId: 'female-yujie' },
+    });
+    const ungendered = agent({
+      role: 'student',
+      voiceDesign: { identity: '年轻学生', texture: '清亮', delivery: '轻快' },
+    });
+    const male = agent({
+      role: 'student',
+      voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+    });
+    const roster = [teacher, ungendered, male];
+    expect(resolveAgentVoice(ungendered, 1, providers, undefined, { roster })?.voiceId).toBe(
+      'male-qn-jingying',
+    );
+    expect(resolveAgentVoice(male, 2, providers, undefined, { roster })?.voiceId).toBe(
+      'Chinese (Mandarin)_Gentleman',
+    );
+  });
 });
 
 describe('voice pill playback roster', () => {

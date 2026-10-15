@@ -23,6 +23,7 @@ import type { GeneratedAgentConfig } from '@openmaic/dsl';
 import {
   buildRosterTools,
   ROSTER_TOOL_NAMES,
+  ROSTER_TOOLS_PROMPT,
   type CourseDocument,
   type CourseStore,
 } from '@/lib/server/agent-runtime/roster-tools';
@@ -178,6 +179,63 @@ describe('set_roster', () => {
       delivery: 'calm',
     });
     expect(doc?.stage?.agentIds).toEqual(roster?.map((agent) => agent.id));
+  });
+
+  // Codex P2 on PR #1908: set_roster must advertise and persist language-independent
+  // voiceDesign.gender. A Chinese identity like 「年轻女性学生」 has no English
+  // male/female fallback, so dropping gender on rewrite sends fallbacks back to
+  // the index pick and can mismatch catalogue gender again.
+  it('persists language-independent voiceDesign.gender for non-English identities', async () => {
+    const store = makeStore(makeDoc());
+    const result = await runTool(store, 'set_roster', {
+      stageId: 'stage-test',
+      agents: [
+        {
+          name: '林老师',
+          role: 'teacher',
+          persona: '耐心引导，从已知出发。',
+          voiceDesign: {
+            identity: '中年男教师',
+            gender: 'male',
+            texture: '沉稳低沉',
+            delivery: '从容鼓励',
+          },
+        },
+        {
+          name: '小雨',
+          role: 'student',
+          persona: '好奇爱问。',
+          voiceDesign: {
+            identity: '年轻女性学生',
+            gender: 'female',
+            texture: '清亮轻快',
+            delivery: '活泼认真',
+          },
+        },
+        { name: '阿杰', role: 'student', persona: '认真听讲。' },
+      ],
+    });
+
+    expect(result.isError).toBeUndefined();
+    const roster = (await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs ?? [];
+    expect(roster[0]?.voiceDesign).toEqual({
+      identity: '中年男教师',
+      gender: 'male',
+      texture: '沉稳低沉',
+      delivery: '从容鼓励',
+    });
+    expect(roster[1]?.voiceDesign).toEqual({
+      identity: '年轻女性学生',
+      gender: 'female',
+      texture: '清亮轻快',
+      delivery: '活泼认真',
+    });
+    // Schema and runner guidance must advertise gender so a schema-following
+    // rewrite cannot omit it for course-language identities.
+    const tools = buildTools({ store });
+    const setRoster = tools.find((tool) => tool.name === 'set_roster');
+    expect(JSON.stringify(setRoster?.parameters)).toContain('"gender"');
+    expect(ROSTER_TOOLS_PROMPT).toMatch(/voiceDesign\.gender|gender to "male"/);
   });
 
   it('rejects fewer than 2 agents', async () => {

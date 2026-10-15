@@ -263,9 +263,9 @@ function agentBinaryGender(agent: AgentConfig): 'male' | 'female' | undefined {
  * voices. Neutral voices are not male or female, so a neutral-only catalogue
  * keeps the index pick, the same as a catalogue with no gender data. With a
  * roster, the gendered subset uses a per-gender ordinal and skips configured
- * voice ids, the lecture voice reserved for an unbound teacher, the voice an
- * unavailable binding actually plays, and earlier same-gender fallbacks, instead
- * of `index` modulo that subset. Returns null
+ * voice ids of that provider, the lecture voice reserved for an unbound teacher,
+ * the voice an unavailable binding actually plays, and earlier same-gender
+ * fallbacks, instead of `index` modulo that subset. Returns null
  * when no enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
@@ -278,25 +278,57 @@ export function resolveDeterministicFallbackVoice(
     globalVoice?: { providerId: string; voiceId: string };
   },
 ): ResolvedVoice | null {
-  if (enabledProviders.length === 0) return null;
-  const first = enabledProviders[0];
-  const fallbackVoices =
-    first.providerId === 'qwen-tts'
-      ? first.voices.filter((voice) => isQwenCatalogVoice(voice.id))
-      : first.voices;
-  if (fallbackVoices.length === 0) return null;
-  const sameGender = agentGender
-    ? fallbackVoices.filter((voice) => voice.gender === agentGender)
-    : [];
-  const pool = sameGender.length > 0 ? sameGender : fallbackVoices;
-  const voiceId =
-    roster && agentGender && sameGender.length > 0
-      ? distinctGenderVoiceId(pool, roster, index, agentGender, enabledProviders)
-      : pool[index % pool.length].id;
-  return {
-    providerId: first.providerId,
-    voiceId,
-  };
+  return resolveDeterministicFallbackVoiceCached(
+    enabledProviders,
+    index,
+    agentGender,
+    roster,
+    new Map(),
+  );
+}
+
+function resolveDeterministicFallbackVoiceCached(
+  enabledProviders: ProviderWithVoices[],
+  index: number,
+  agentGender: 'male' | 'female' | undefined,
+  roster:
+    | {
+        agents: AgentConfig[];
+        overrides?: AgentVoiceOverrides;
+        globalVoice?: { providerId: string; voiceId: string };
+      }
+    | undefined,
+  memo: Map<string, ResolvedVoice | null>,
+): ResolvedVoice | null {
+  // One map per top-level call. Other-gender predecessors re-enter this function;
+  // sharing the map keeps an alternating roster linear in the roster length.
+  const cacheKey = `${index}:${agentGender ?? ''}`;
+  if (memo.has(cacheKey)) return memo.get(cacheKey) ?? null;
+
+  let resolved: ResolvedVoice | null = null;
+  if (enabledProviders.length > 0) {
+    const first = enabledProviders[0];
+    const fallbackVoices =
+      first.providerId === 'qwen-tts'
+        ? first.voices.filter((voice) => isQwenCatalogVoice(voice.id))
+        : first.voices;
+    if (fallbackVoices.length > 0) {
+      const sameGender = agentGender
+        ? fallbackVoices.filter((voice) => voice.gender === agentGender)
+        : [];
+      const pool = sameGender.length > 0 ? sameGender : fallbackVoices;
+      const voiceId =
+        roster && agentGender && sameGender.length > 0
+          ? distinctGenderVoiceId(pool, roster, index, agentGender, enabledProviders, memo)
+          : pool[index % pool.length].id;
+      resolved = {
+        providerId: first.providerId,
+        voiceId,
+      };
+    }
+  }
+  memo.set(cacheKey, resolved);
+  return resolved;
 }
 
 /** Next unused voice in `pool`, or a stable wrap once every matching voice is taken. */
@@ -386,13 +418,11 @@ function unavailableBindingPlaybackVoiceId(
     },
     lectureEnabled,
   );
-  // The stored id is reserved by the caller. Only the substituted lecture voice
-  // needs a second slot, and only when it belongs to this catalogue.
-  if (
-    !effective ||
-    effective.providerId !== provider.providerId ||
-    effective.voiceId === configured.voiceId
-  ) {
+  // The caller reserves a stored id only when that binding is on this catalogue.
+  // A substituted voice on this catalogue still needs a slot, including when
+  // another provider uses the same id string.
+  if (!effective || effective.providerId !== provider.providerId) return undefined;
+  if (effective.voiceId === configured.voiceId && configured.providerId === provider.providerId) {
     return undefined;
   }
   return effective.voiceId;
@@ -400,17 +430,17 @@ function unavailableBindingPlaybackVoiceId(
 
 /**
  * Voice for one unbound agent of `agentGender`. Before allocating fallbacks,
- * reserve every configured roster voice (including one that appears later) and
- * the lecture voice an unbound teacher speaks. A roster agent whose stored
- * binding playback has marked unavailable still keeps that binding, but
- * allocation reserves the voice playback speaks after the unavailable-binding
- * fallback.
+ * reserve every configured roster voice on the fallback provider (including
+ * one that appears later) and the lecture voice an unbound teacher speaks. A
+ * roster agent whose stored binding playback has marked unavailable still keeps
+ * that binding, but allocation reserves the voice playback speaks after the
+ * unavailable-binding fallback when that voice is on the fallback provider.
  * That reservation does not consume a fallback slot. Earlier unbound agents of
  * the same gender then take the remaining voices. An earlier unbound agent with
  * no recognizable gender (or another gender) still reserves the deterministic
- * fallback it actually selected when that id is in this pool. An unbound teacher
- * does not take a slot, because discussion playback does not speak this fallback
- * for them.
+ * fallback it actually selected when that id is in this pool and that provider.
+ * An unbound teacher does not take a slot, because discussion playback does not
+ * speak this fallback for them.
  */
 function distinctGenderVoiceId(
   pool: Array<{ id: string }>,
@@ -422,14 +452,16 @@ function distinctGenderVoiceId(
   index: number,
   agentGender: 'male' | 'female',
   enabledProviders: ProviderWithVoices[],
+  memo: Map<string, ResolvedVoice | null>,
 ): string {
   const used = new Set<string>();
+  const fallbackProviderId = enabledProviders[0]?.providerId;
   const teacherVoice = unboundTeacherReservedVoiceId(enabledProviders[0], roster.globalVoice);
   for (const other of roster.agents) {
     if (!other) continue;
     const configured = resolveConfiguredAgentVoice(other, enabledProviders, roster.overrides);
     if (configured) {
-      used.add(configured.voiceId);
+      if (configured.providerId === fallbackProviderId) used.add(configured.voiceId);
       const played = unavailableBindingPlaybackVoiceId(
         configured,
         enabledProviders,
@@ -453,10 +485,20 @@ function distinctGenderVoiceId(
       continue;
     }
     // Ungendered (or other-gender) predecessors still take a deterministic
-    // fallback. Reserve that id when it lands in this gender pool so a later
-    // same-gender agent does not collide with it.
-    const taken = resolveDeterministicFallbackVoice(enabledProviders, i, earlierGender, roster);
-    if (taken && pool.some((voice) => voice.id === taken.voiceId)) {
+    // fallback. Reserve that id when it lands in this gender pool on the
+    // fallback provider so a later same-gender agent does not collide with it.
+    const taken = resolveDeterministicFallbackVoiceCached(
+      enabledProviders,
+      i,
+      earlierGender,
+      roster,
+      memo,
+    );
+    if (
+      taken &&
+      taken.providerId === fallbackProviderId &&
+      pool.some((voice) => voice.id === taken.voiceId)
+    ) {
       used.add(taken.voiceId);
     }
   }

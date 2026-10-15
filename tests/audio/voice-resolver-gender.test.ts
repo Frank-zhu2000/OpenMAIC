@@ -475,6 +475,146 @@ describe('resolveAgentVoice gender fallback', () => {
       'Chinese (Mandarin)_Gentleman',
     );
   });
+
+  it('does not reserve a fallback voice id configured on another provider', () => {
+    // Codex P2: custom-provider 'nova' is not OpenAI 'nova'. A bare voiceId
+    // reservation pushes the unbound student onto shimmer while nova is free.
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+      'custom-tts-lab': {
+        apiKey: 'k',
+        enabled: true,
+        customVoices: [{ id: 'nova', name: 'Custom Nova' }],
+      },
+    });
+    expect(providers[0]?.providerId).toBe('openai-tts');
+    const bound = agent({
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+      voiceConfig: { providerId: 'custom-tts-lab', voiceId: 'nova' },
+    });
+    const unbound = agent({
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    });
+    const roster = [unbound, bound];
+    expect(resolveAgentVoice(bound, 1, providers, undefined, { roster })).toEqual({
+      providerId: 'custom-tts-lab',
+      voiceId: 'nova',
+    });
+    expect(resolveAgentVoice(unbound, 0, providers, undefined, { roster })).toEqual({
+      providerId: 'openai-tts',
+      voiceId: 'nova',
+    });
+  });
+
+  it('reserves the fallback lecture voice when another provider uses the same id', () => {
+    // Playback of an unavailable custom 'nova' speaks OpenAI nova. That catalogue
+    // id stays reserved even though the stored binding is a different provider.
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+      'custom-tts-lab': {
+        apiKey: 'k',
+        enabled: true,
+        customVoices: [{ id: 'nova', name: 'Custom Nova' }],
+      },
+    });
+    const stored = { providerId: 'custom-tts-lab' as const, voiceId: 'nova' };
+    const globalVoice = { providerId: 'openai-tts' as const, voiceId: 'nova' };
+    const bound = agent({
+      role: 'student',
+      voiceConfig: { ...stored },
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const unbound = agent({
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    });
+    const roster = [bound, unbound];
+    clearUnavailableVoiceBindingsForTests();
+    markVoiceBindingUnavailable(stored);
+    try {
+      expect(resolveAgentVoice(bound, 0, providers, undefined, { roster, globalVoice })).toEqual({
+        providerId: 'custom-tts-lab',
+        voiceId: 'nova',
+      });
+      expect(resolveAgentVoice(unbound, 1, providers, undefined, { roster, globalVoice })).toEqual({
+        providerId: 'openai-tts',
+        voiceId: 'shimmer',
+      });
+    } finally {
+      clearUnavailableVoiceBindingsForTests();
+    }
+  });
+
+  it('allocates a large alternating roster without exponential predecessor work', () => {
+    // Codex P2: each other-gender predecessor re-entered distinctGenderVoiceId,
+    // so an alternating unbound roster blew up. Small rosters keep the per-gender
+    // ordinal (males echo/onyx, females nova/shimmer).
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+    });
+    expect(
+      providers[0].voices.filter((voice) => voice.gender === 'male').map((voice) => voice.id),
+    ).toEqual(['echo', 'onyx']);
+    expect(
+      providers[0].voices.filter((voice) => voice.gender === 'female').map((voice) => voice.id),
+    ).toEqual(['nova', 'shimmer']);
+    const genderAt = (index: number): 'male' | 'female' => (index % 2 === 0 ? 'male' : 'female');
+    const ordinalVoice = (index: number): string => {
+      const pool = index % 2 === 0 ? ['echo', 'onyx'] : ['nova', 'shimmer'];
+      return pool[Math.floor(index / 2) % pool.length];
+    };
+    const makeRoster = (count: number) =>
+      Array.from({ length: count }, (_, index) => {
+        const gender = genderAt(index);
+        return agent({
+          role: 'student',
+          voiceDesign: {
+            identity: gender === 'male' ? 'young male student' : 'young female student',
+            gender,
+            texture: 'warm',
+            delivery: 'calm',
+          },
+        });
+      });
+
+    const small = makeRoster(6);
+    expect(
+      small.map(
+        (entry, index) =>
+          resolveAgentVoice(entry, index, providers, undefined, { roster: small })?.voiceId,
+      ),
+    ).toEqual(['echo', 'nova', 'onyx', 'shimmer', 'echo', 'nova']);
+
+    const roster = makeRoster(48);
+    const started = Date.now();
+    const voices = roster.map(
+      (entry, index) => resolveAgentVoice(entry, index, providers, undefined, { roster })?.voiceId,
+    );
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(voices).toEqual(roster.map((_, index) => ordinalVoice(index)));
+  }, 5000);
 });
 
 describe('voice pill playback roster', () => {

@@ -80,9 +80,12 @@ export function resolveNarratorVoiceBinding(
 export interface ResolveAgentVoiceOptions {
   /**
    * Agents in the same order as `agentIndex`. When present, a male/female
-   * fallback uses a per-gender ordinal and skips configured voices, the
-   * lecture voice reserved for an unbound teacher, and earlier same-gender
-   * fallbacks. Omit it to keep the index pick.
+   * fallback with same-gender voices uses a per-gender ordinal. An ungendered
+   * agent, or one with no same-gender voices, takes the next free voice in
+   * the full pool. Both skip configured voices, earlier fallbacks, and the
+   * lecture voice reserved for an unbound teacher. Teacher reservation follows
+   * voiceConfig or that lecture voice, not agentVoiceOverrides. Omit the
+   * roster to keep the index pick.
    */
   roster?: AgentConfig[];
   /**
@@ -264,11 +267,13 @@ function agentBinaryGender(agent: AgentConfig): 'male' | 'female' | undefined {
  * female and the catalogue lists that gender, the pick stays inside those
  * voices. Neutral voices are not male or female, so a neutral-only catalogue
  * keeps the index pick, the same as a catalogue with no gender data. With a
- * roster, the gendered subset uses a per-gender ordinal and skips configured
- * voice ids of that provider, the lecture voice reserved for an unbound teacher,
- * the voice an unavailable binding actually plays, and earlier same-gender
- * fallbacks, instead of `index` modulo that subset. Returns null
- * when no enabled provider can serve a voice.
+ * roster, the gendered subset uses a per-gender ordinal, and an ungendered
+ * agent (or one with no same-gender voices) takes the next free voice in the
+ * full pool. Both skip configured voice ids of that provider, the voice an
+ * unavailable binding actually plays, earlier fallbacks, and the lecture voice
+ * reserved for an unbound teacher. Teacher reservation follows voiceConfig or
+ * that lecture voice, not agentVoiceOverrides. This replaces `index` modulo
+ * the pool. Returns null when no enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
   enabledProviders: ProviderWithVoices[],

@@ -995,6 +995,60 @@ describe('agent profiles — voice gender', () => {
       'en-US-JennyNeural',
     ]);
   });
+
+  it('prefers an other-language voice whose holder can move over one whose holder is stuck', async () => {
+    // Every match for Max is other-language. Bea will move to the only female
+    // voice, so M1 frees up. Cleo also wants that voice and stays on M0. Taking
+    // M0 in catalogue order would leave Max and Cleo sharing it while M1 is free.
+    const voices: NonNullable<AgentProfilesInput['availableVoices']> = [
+      {
+        providerId: 'azure-tts',
+        voiceId: 'M0',
+        voiceName: 'M0',
+        voiceLanguage: 'en-US',
+        gender: 'male',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'M1',
+        voiceName: 'M1',
+        voiceLanguage: 'en-US',
+        gender: 'male',
+      },
+      {
+        providerId: 'azure-tts',
+        voiceId: 'F',
+        voiceName: 'F',
+        voiceLanguage: 'zh-CN',
+        gender: 'female',
+      },
+    ];
+    const agents = await generate(
+      [
+        profile({
+          name: 'Max',
+          role: 'teacher',
+          voice: 'azure-tts::F',
+          voiceDesign: { identity: 'middle-aged male teacher', texture: 'warm', delivery: 'calm' },
+        }),
+        profile({
+          name: 'Bea',
+          role: 'student',
+          voice: 'azure-tts::M1',
+          voiceDesign: { identity: 'young female student', texture: 'bright', delivery: 'quick' },
+        }),
+        profile({
+          name: 'Cleo',
+          role: 'student',
+          voice: 'azure-tts::M0',
+          voiceDesign: { identity: 'young female student', texture: 'light', delivery: 'lively' },
+        }),
+      ],
+      { availableVoices: voices },
+    );
+
+    expect(agents.map((entry) => entry.voiceConfig?.voiceId)).toEqual(['M1', 'F', 'M0']);
+  });
 });
 
 describe('agent profiles — localized identity gender field', () => {

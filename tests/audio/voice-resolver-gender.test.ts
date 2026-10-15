@@ -617,15 +617,13 @@ describe('resolveAgentVoice gender fallback', () => {
   }, 5000);
 
   it('does not give an ungendered agent a voice an earlier gendered fallback already took', () => {
-    // MiniMax: teacher speaks female-yujie, the female student at index 1 takes
-    // female-shaonv, and a raw full-pool index 2 is female-shaonv again.
+    // MiniMax starts female-yujie, male-qn-jingying, female-shaonv. The female
+    // student takes female-yujie, the first full-pool slot once the teacher's
+    // later voiceConfig is set aside. Reserving that fallback sends the
+    // ungendered agent to male-qn-jingying; without the reservation,
+    // female-yujie would stay first-free. A raw index 2 is female-shaonv.
     const providers = getEnabledProvidersWithVoices({
       'minimax-tts': { apiKey: 'k', enabled: true },
-    });
-    const teacher = agent({
-      role: 'teacher',
-      voiceConfig: { providerId: 'minimax-tts', voiceId: 'female-yujie' },
-      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
     });
     const female = agent({
       role: 'student',
@@ -636,13 +634,18 @@ describe('resolveAgentVoice gender fallback', () => {
         delivery: 'quick',
       },
     });
+    const teacher = agent({
+      role: 'teacher',
+      voiceConfig: { providerId: 'minimax-tts', voiceId: 'Chinese (Mandarin)_Gentleman' },
+      voiceDesign: { identity: 'middle-aged male teacher', texture: 'warm', delivery: 'calm' },
+    });
     const ungendered = agent({
       role: 'student',
       voiceDesign: { identity: '年轻学生', texture: '清亮', delivery: '轻快' },
     });
-    const roster = [teacher, female, ungendered];
-    expect(resolveAgentVoice(female, 1, providers, undefined, { roster })?.voiceId).toBe(
-      'female-shaonv',
+    const roster = [female, teacher, ungendered];
+    expect(resolveAgentVoice(female, 0, providers, undefined, { roster })?.voiceId).toBe(
+      'female-yujie',
     );
     expect(resolveAgentVoice(ungendered, 2, providers, undefined, { roster })?.voiceId).toBe(
       'male-qn-jingying',

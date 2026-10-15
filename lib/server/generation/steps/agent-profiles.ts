@@ -170,8 +170,9 @@ function pickMatchingGenderVoice(
     return (usage.get(key) ?? 0) <= 0;
   });
   // Same language and nobody holds it, then same language held only by an
-  // agent who can still move, then another language nobody holds, then any
-  // other unused match. Stuck means a holder will not leave: failed move,
+  // agent who can still move, then another language nobody holds, then
+  // another language held only by an agent who can still move, then a voice
+  // whose holder is stuck. Stuck means a holder will not leave: failed move,
   // narrator, already matching, or no possible destination yet.
   const rank = (voice: AdvertisedVoice): number => {
     const key = advertisedVoiceToken(voice);
@@ -180,10 +181,11 @@ function pickMatchingGenderVoice(
     if (sameLanguage && !held) return 0;
     if (sameLanguage && held && !stuck.has(key)) return 1;
     if (!held) return 2;
-    return 3;
+    if (held && !stuck.has(key)) return 3;
+    return 4;
   };
   let best: AdvertisedVoice | undefined;
-  let bestRank = 4;
+  let bestRank = 5;
   for (const voice of matches) {
     const voiceRank = rank(voice);
     if (voiceRank < bestRank) {
@@ -286,7 +288,8 @@ function voiceHolds(
  * A failed move keeps the current voice and does not mark it used. Prefer a
  * same-language voice nobody holds, then a same-language voice held only by
  * an agent who can still move, then an other-language voice nobody holds,
- * then any other unused match. A voice is stuck when its holder will not leave.
+ * then an other-language voice held only by an agent who can still move,
+ * then a voice whose holder is stuck. A voice is stuck when its holder will not leave.
  */
 function reconcileOppositeVoiceGenders(
   agents: GeneratedAgentProfile[],

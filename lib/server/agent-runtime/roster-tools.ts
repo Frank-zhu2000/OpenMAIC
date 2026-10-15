@@ -190,12 +190,10 @@ const SET_ROSTER_AGENT_PARAMS = Type.Object({
         description:
           'gender + age + role in the stage language, e.g. "middle-aged male teacher" or "年轻女性学生"',
       }),
-      gender: Type.Optional(
-        Type.Union([Type.Literal('male'), Type.Literal('female')], {
-          description:
-            '"male" or "female" only — these two English words, never a translation. Language-independent; must name the same gender as identity. Always set this when writing voiceDesign so non-English identities keep gender-aware voice binding.',
-        }),
-      ),
+      gender: Type.Union([Type.Literal('male'), Type.Literal('female')], {
+        description:
+          '"male" or "female" only — these two English words, never a translation. Language-independent; must name the same gender as identity. Always set this when writing voiceDesign so non-English identities keep gender-aware voice binding.',
+      }),
       texture: Type.String({
         description: 'pitch + vocal quality, e.g. "warm low-pitched slightly husky"',
       }),

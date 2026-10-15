@@ -106,11 +106,13 @@ export interface ResolveAgentVoiceOptions {
  *    offers. The agent's own voiceConfig is validated the same way next.
  * 2. Otherwise, deterministically pick the first enabled provider. When the
  *    catalogue lists the agent's gender, the pick stays in that male or female
- *    subset. With a roster, that subset uses a per-gender ordinal and skips
- *    configured voices, the lecture voice reserved for an unbound teacher,
- *    and earlier same-gender fallbacks. Without a roster, or
- *    when that subset is empty (no gender on those voices, or only neutral),
- *    the pick is `agentIndex` modulo the pool. Browser-native is in the pool
+ *    subset. With a roster, fallbacks share one reservation: configured voices
+ *    on the fallback provider, the teacher's playback voice (voiceConfig or the
+ *    lecture voice, never a per-agent override), unavailable-binding playback,
+ *    and earlier unbound agents' actual fallbacks. A gendered agent takes the
+ *    next free voice in its subset; an ungendered agent, or one with no
+ *    same-gender voices, takes the next free voice in the full pool. Without
+ *    a roster the pick is `agentIndex` modulo the pool. Browser-native is in the pool
  *    only when the caller included it: getEnabledProvidersWithVoices excludes
  *    it, getSelectableProvidersWithVoices appends it LAST, so it is the index
  *    target only when it is the sole enabled provider.
@@ -320,7 +322,9 @@ function resolveDeterministicFallbackVoiceCached(
       const voiceId =
         roster && agentGender && sameGender.length > 0
           ? distinctGenderVoiceId(pool, roster, index, agentGender, enabledProviders, memo)
-          : pool[index % pool.length].id;
+          : roster
+            ? distinctFullPoolVoiceId(pool, roster, index, enabledProviders, memo)
+            : pool[index % pool.length].id;
       resolved = {
         providerId: first.providerId,
         voiceId,
@@ -428,38 +432,42 @@ function unavailableBindingPlaybackVoiceId(
   return effective.voiceId;
 }
 
+type FallbackRoster = {
+  agents: AgentConfig[];
+  overrides?: AgentVoiceOverrides;
+  globalVoice?: { providerId: string; voiceId: string };
+};
+
 /**
- * Voice for one unbound agent of `agentGender`. Before allocating fallbacks,
- * reserve every configured roster voice on the fallback provider (including
- * one that appears later) and the lecture voice an unbound teacher speaks. A
- * roster agent whose stored binding playback has marked unavailable still keeps
- * that binding, but allocation reserves the voice playback speaks after the
- * unavailable-binding fallback when that voice is on the fallback provider.
- * That reservation does not consume a fallback slot. Earlier unbound agents of
- * the same gender then take the remaining voices. An earlier unbound agent with
- * no recognizable gender (or another gender) still reserves the deterministic
- * fallback it actually selected when that id is in this pool and that provider.
- * An unbound teacher does not take a slot, because discussion playback does not
- * speak this fallback for them.
+ * Stored binding to reserve. Teachers ignore per-agent overrides and contribute
+ * voiceConfig only; a null result lets the caller reserve the lecture voice.
+ * Other agents keep override, then voiceConfig.
  */
-function distinctGenderVoiceId(
-  pool: Array<{ id: string }>,
-  roster: {
-    agents: AgentConfig[];
-    overrides?: AgentVoiceOverrides;
-    globalVoice?: { providerId: string; voiceId: string };
-  },
-  index: number,
-  agentGender: 'male' | 'female',
+function reservationConfiguredVoice(
+  agent: AgentConfig,
   enabledProviders: ProviderWithVoices[],
-  memo: Map<string, ResolvedVoice | null>,
-): string {
+  overrides: AgentVoiceOverrides | undefined,
+): ResolvedVoice | null {
+  if (agent.role === 'teacher') {
+    return resolveConfiguredAgentVoice(agent, enabledProviders, undefined);
+  }
+  return resolveConfiguredAgentVoice(agent, enabledProviders, overrides);
+}
+
+/**
+ * Voices already taken on the fallback provider: configured bindings, the
+ * teacher's playback voice, and unavailable-binding playback.
+ */
+function reservedRosterVoiceIds(
+  roster: FallbackRoster,
+  enabledProviders: ProviderWithVoices[],
+): Set<string> {
   const used = new Set<string>();
   const fallbackProviderId = enabledProviders[0]?.providerId;
   const teacherVoice = unboundTeacherReservedVoiceId(enabledProviders[0], roster.globalVoice);
   for (const other of roster.agents) {
     if (!other) continue;
-    const configured = resolveConfiguredAgentVoice(other, enabledProviders, roster.overrides);
+    const configured = reservationConfiguredVoice(other, enabledProviders, roster.overrides);
     if (configured) {
       if (configured.providerId === fallbackProviderId) used.add(configured.voiceId);
       const played = unavailableBindingPlaybackVoiceId(
@@ -472,11 +480,32 @@ function distinctGenderVoiceId(
     }
     if (other.role === 'teacher' && teacherVoice) used.add(teacherVoice);
   }
+  return used;
+}
+
+/**
+ * Voice for one unbound agent of `agentGender`. Reservations come from
+ * `reservedRosterVoiceIds` and do not consume a fallback slot. Earlier unbound
+ * agents of the same gender then take the remaining voices. An earlier unbound
+ * agent with no recognizable gender (or another gender) reserves the fallback
+ * it actually selected when that id is in this pool. An unbound teacher does
+ * not take a slot, because discussion playback does not speak this fallback.
+ */
+function distinctGenderVoiceId(
+  pool: Array<{ id: string }>,
+  roster: FallbackRoster,
+  index: number,
+  agentGender: 'male' | 'female',
+  enabledProviders: ProviderWithVoices[],
+  memo: Map<string, ResolvedVoice | null>,
+): string {
+  const used = reservedRosterVoiceIds(roster, enabledProviders);
+  const fallbackProviderId = enabledProviders[0]?.providerId;
   let overflow = 0;
   for (let i = 0; i < index; i++) {
     const earlier = roster.agents[i];
     if (!earlier) continue;
-    if (resolveConfiguredAgentVoice(earlier, enabledProviders, roster.overrides)) continue;
+    if (reservationConfiguredVoice(earlier, enabledProviders, roster.overrides)) continue;
     if (earlier.role === 'teacher') continue;
     const earlierGender = agentBinaryGender(earlier);
     if (earlierGender === agentGender) {
@@ -501,6 +530,46 @@ function distinctGenderVoiceId(
     ) {
       used.add(taken.voiceId);
     }
+  }
+  return distinctVoiceId(pool, used, overflow);
+}
+
+/**
+ * Full-pool fallback when the agent has no gender, or its gender has no
+ * catalogue voices. Same reservations as the gendered path, including the
+ * fallback an earlier unbound agent of either gender actually speaks. The
+ * next free voice wins; once the pool is exhausted the fallback ordinal wraps.
+ */
+function distinctFullPoolVoiceId(
+  pool: Array<{ id: string }>,
+  roster: FallbackRoster,
+  index: number,
+  enabledProviders: ProviderWithVoices[],
+  memo: Map<string, ResolvedVoice | null>,
+): string {
+  const used = reservedRosterVoiceIds(roster, enabledProviders);
+  const fallbackProviderId = enabledProviders[0]?.providerId;
+  let overflow = 0;
+  for (let i = 0; i < index; i++) {
+    const earlier = roster.agents[i];
+    if (!earlier) continue;
+    if (reservationConfiguredVoice(earlier, enabledProviders, roster.overrides)) continue;
+    if (earlier.role === 'teacher') continue;
+    const taken = resolveDeterministicFallbackVoiceCached(
+      enabledProviders,
+      i,
+      agentBinaryGender(earlier),
+      roster,
+      memo,
+    );
+    if (
+      taken &&
+      taken.providerId === fallbackProviderId &&
+      pool.some((voice) => voice.id === taken.voiceId)
+    ) {
+      used.add(taken.voiceId);
+    }
+    overflow += 1;
   }
   return distinctVoiceId(pool, used, overflow);
 }

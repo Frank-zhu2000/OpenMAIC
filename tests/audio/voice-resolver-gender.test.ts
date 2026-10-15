@@ -615,6 +615,197 @@ describe('resolveAgentVoice gender fallback', () => {
     expect(Date.now() - started).toBeLessThan(1000);
     expect(voices).toEqual(roster.map((_, index) => ordinalVoice(index)));
   }, 5000);
+
+  it('does not give an ungendered agent a voice an earlier gendered fallback already took', () => {
+    // MiniMax: teacher speaks female-yujie, the female student at index 1 takes
+    // female-shaonv, and a raw full-pool index 2 is female-shaonv again.
+    const providers = getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+    const teacher = agent({
+      role: 'teacher',
+      voiceConfig: { providerId: 'minimax-tts', voiceId: 'female-yujie' },
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+    });
+    const female = agent({
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    });
+    const ungendered = agent({
+      role: 'student',
+      voiceDesign: { identity: '年轻学生', texture: '清亮', delivery: '轻快' },
+    });
+    const roster = [teacher, female, ungendered];
+    expect(resolveAgentVoice(female, 1, providers, undefined, { roster })?.voiceId).toBe(
+      'female-shaonv',
+    );
+    expect(resolveAgentVoice(ungendered, 2, providers, undefined, { roster })?.voiceId).toBe(
+      'male-qn-jingying',
+    );
+    // No roster: the same ungendered agent stays on the full-pool index.
+    expect(resolveAgentVoice(ungendered, 2, providers)?.voiceId).toBe('female-shaonv');
+  });
+
+  it('reserves the voice an earlier ungendered agent actually picked', () => {
+    // Teacher holds male-qn-jingying. The ungendered agent at index 1 would
+    // collide with that id on a raw index, so it takes female-yujie. The later
+    // female must reserve that pick, not the raw index, and take female-shaonv.
+    const providers = getEnabledProvidersWithVoices({
+      'minimax-tts': { apiKey: 'k', enabled: true },
+    });
+    const teacher = agent({
+      role: 'teacher',
+      voiceConfig: { providerId: 'minimax-tts', voiceId: 'male-qn-jingying' },
+      voiceDesign: { identity: 'middle-aged male teacher', texture: 'warm', delivery: 'calm' },
+    });
+    const ungendered = agent({
+      role: 'student',
+      voiceDesign: { identity: '年轻学生', texture: '清亮', delivery: '轻快' },
+    });
+    const female = agent({
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    });
+    const roster = [teacher, ungendered, female];
+    expect(resolveAgentVoice(ungendered, 1, providers, undefined, { roster })?.voiceId).toBe(
+      'female-yujie',
+    );
+    expect(resolveAgentVoice(female, 2, providers, undefined, { roster })?.voiceId).toBe(
+      'female-shaonv',
+    );
+  });
+
+  it('reserves roster voices when the agent gender has no same-gender pool', () => {
+    const malesOnly: ProviderWithVoices = {
+      ...gendered,
+      voices: [
+        { id: 'm0', name: 'M0', gender: 'male' },
+        { id: 'm1', name: 'M1', gender: 'male' },
+        { id: 'm2', name: 'M2', gender: 'male' },
+      ],
+    };
+    const bound = agent({
+      role: 'student',
+      voiceConfig: { providerId: 'openai-tts', voiceId: 'm1' },
+      voiceDesign: {
+        identity: 'young male student',
+        gender: 'male',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const female = agent({
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    });
+    const roster = [bound, female];
+    // Index 1 is m1, which the earlier agent already speaks.
+    expect(resolveAgentVoice(female, 1, [malesOnly], undefined, { roster })?.voiceId).toBe('m0');
+    expect(resolveAgentVoice(female, 1, [malesOnly])?.voiceId).toBe('m1');
+  });
+
+  it('wraps the full pool stably once every fallback voice is reserved', () => {
+    const two: ProviderWithVoices = {
+      providerId: 'custom-tts-lab',
+      providerName: 'Lab',
+      voices: [
+        { id: 'v0', name: 'Zero' },
+        { id: 'v1', name: 'One' },
+      ],
+      modelGroups: [],
+    };
+    const teacher = agent({
+      role: 'teacher',
+      voiceConfig: { providerId: 'custom-tts-lab', voiceId: 'v0' },
+    });
+    const first = agent({
+      role: 'student',
+      voiceDesign: { identity: '学生甲', texture: '清', delivery: '稳' },
+    });
+    const second = agent({
+      role: 'student',
+      voiceDesign: { identity: '学生乙', texture: '亮', delivery: '快' },
+    });
+    const roster = [teacher, first, second];
+    expect(resolveAgentVoice(first, 1, [two], undefined, { roster })?.voiceId).toBe('v1');
+    // Index 2 modulo 2 is v0, the teacher's voice. The exhausted pool wraps to v1.
+    expect(resolveAgentVoice(second, 2, [two], undefined, { roster })?.voiceId).toBe('v1');
+  });
+
+  it('reserves the teacher playback voice instead of a stale per-agent override', () => {
+    const providers = getEnabledProvidersWithVoices({
+      'openai-tts': { apiKey: 'k', enabled: true },
+    });
+    expect(
+      providers[0].voices.filter((voice) => voice.gender === 'female').map((voice) => voice.id),
+    ).toEqual(['nova', 'shimmer']);
+    const student = agent({
+      id: 'student-1',
+      role: 'student',
+      voiceDesign: {
+        identity: 'young female student',
+        gender: 'female',
+        texture: 'bright',
+        delivery: 'quick',
+      },
+    });
+    const boundTeacher = agent({
+      id: 'teacher-1',
+      role: 'teacher',
+      voiceConfig: { providerId: 'openai-tts', voiceId: 'nova' },
+      voiceDesign: {
+        identity: 'middle-aged female teacher',
+        gender: 'female',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const overrides = {
+      'teacher-1': { providerId: 'openai-tts' as const, voiceId: 'shimmer' },
+    };
+    const boundRoster = [boundTeacher, student];
+    // Playback speaks voiceConfig nova and ignores the shimmer override.
+    expect(
+      resolveAgentVoice(student, 1, providers, overrides, {
+        roster: boundRoster,
+        globalVoice: { providerId: 'openai-tts', voiceId: 'alloy' },
+      })?.voiceId,
+    ).toBe('shimmer');
+
+    const unboundTeacher = agent({
+      id: 'teacher-1',
+      role: 'teacher',
+      voiceDesign: {
+        identity: 'middle-aged female teacher',
+        gender: 'female',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const lecture = { providerId: 'openai-tts' as const, voiceId: 'nova' };
+    // No voiceConfig: playback speaks the lecture voice, not the override.
+    expect(
+      resolveAgentVoice(student, 1, providers, overrides, {
+        roster: [unboundTeacher, student],
+        globalVoice: lecture,
+      })?.voiceId,
+    ).toBe('shimmer');
+  });
 });
 
 describe('voice pill playback roster', () => {
@@ -760,6 +951,49 @@ describe('voice pill playback roster', () => {
     expect(displayed).toEqual(spoken);
     expect(spoken?.voiceId).toBe('female-shaonv');
     expect(pill.roster.map((entry) => entry.id)).toEqual(['default-1', 'custom-2']);
+  });
+
+  it('matches playback when a stale teacher override is not the lecture voice', () => {
+    // AgentVoicePill resolves the selected roster with agentVoiceOverrides.
+    // The teacher pill edits the global lecture voice and does not read overrides.
+    // Playback speaks the teacher's voiceConfig, so the student pill must reserve
+    // nova and show shimmer while shimmer is the stale override.
+    const providers = openAI();
+    const teacher = agent({
+      id: 'teacher-1',
+      role: 'teacher',
+      voiceConfig: { providerId: 'openai-tts', voiceId: 'nova' },
+      voiceDesign: {
+        identity: 'middle-aged female teacher',
+        gender: 'female',
+        texture: 'warm',
+        delivery: 'calm',
+      },
+    });
+    const student = female('student-1');
+    const catalogue = [teacher, student];
+    const selectedAgentIds = ['teacher-1', 'student-1'];
+    const overrides = {
+      'teacher-1': { providerId: 'openai-tts' as const, voiceId: 'shimmer' },
+    };
+    const globalVoice = { providerId: 'openai-tts' as const, voiceId: 'alloy' };
+    const playback = selectedAgentIds
+      .map((id) => catalogue.find((entry) => entry.id === id))
+      .filter((entry): entry is AgentConfig => entry != null);
+    const pill = voicePillPlaybackRoster(catalogue, selectedAgentIds, student);
+    const displayed = resolveAgentVoice(student, pill.index, providers, overrides, {
+      roster: pill.roster,
+      globalVoice,
+    });
+    const spoken = resolveAgentVoice(
+      student,
+      playback.findIndex((entry) => entry.id === student.id),
+      providers,
+      overrides,
+      { roster: playback, globalVoice },
+    );
+    expect(displayed).toEqual(spoken);
+    expect(spoken?.voiceId).toBe('shimmer');
   });
 });
 

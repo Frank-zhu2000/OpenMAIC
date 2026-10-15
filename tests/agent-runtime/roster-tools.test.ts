@@ -16,6 +16,7 @@
  *    generate_roster.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Value } from 'typebox/value';
 
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { GeneratedAgentConfig } from '@openmaic/dsl';
@@ -236,6 +237,49 @@ describe('set_roster', () => {
     const setRoster = tools.find((tool) => tool.name === 'set_roster');
     expect(JSON.stringify(setRoster?.parameters)).toContain('"gender"');
     expect(ROSTER_TOOLS_PROMPT).toMatch(/voiceDesign\.gender|gender to "male"/);
+  });
+
+  it('requires gender whenever set_roster voiceDesign is present', () => {
+    const setRoster = buildTools().find((tool) => tool.name === 'set_roster');
+    expect(setRoster).toBeDefined();
+    const teacher = { name: '林老师', role: 'teacher', persona: '耐心引导，从已知出发。' };
+    const student = { name: '小雨', role: 'student', persona: '好奇爱问。' };
+    const voiceDesign = {
+      identity: '年轻女性学生',
+      texture: '清亮轻快',
+      delivery: '活泼认真',
+    };
+    expect(
+      Value.Check(setRoster!.parameters, {
+        stageId: 'stage-test',
+        agents: [teacher, { ...student, voiceDesign: { ...voiceDesign, gender: 'female' } }],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(setRoster!.parameters, {
+        stageId: 'stage-test',
+        agents: [teacher, { ...student, voiceDesign: { ...voiceDesign, gender: 'male' } }],
+      }),
+    ).toBe(true);
+    // voiceDesign stays optional; a design without gender is not schema-valid.
+    expect(
+      Value.Check(setRoster!.parameters, {
+        stageId: 'stage-test',
+        agents: [teacher, student],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(setRoster!.parameters, {
+        stageId: 'stage-test',
+        agents: [teacher, { ...student, voiceDesign }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(setRoster!.parameters, {
+        stageId: 'stage-test',
+        agents: [teacher, { ...student, voiceDesign: { ...voiceDesign, gender: '女性' } }],
+      }),
+    ).toBe(false);
   });
 
   it('rejects fewer than 2 agents', async () => {

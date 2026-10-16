@@ -14,6 +14,85 @@ export const TTS_MAX_TEXT_LENGTH: Partial<Record<TTSProviderId, number>> = {
 };
 
 /**
+ * Spoken readings for Greek letters. Captions, the HTML player, and narration
+ * export keep the symbol; only the string sent to a TTS engine is rewritten.
+ * ASCII `e` is intentionally absent — it is already a letter, and rewriting it
+ * would change ordinary words.
+ *
+ * Each row is `letters`, Chinese reading, English reading. Variant glyphs
+ * (final sigma, lunate epsilon, and the math forms of theta/phi/pi/rho) share
+ * the letter's reading.
+ */
+const GREEK_READINGS: ReadonlyArray<readonly [string, string, string]> = [
+  ['Αα', '阿尔法', 'alpha'],
+  ['Ββ', '贝塔', 'beta'],
+  ['Γγ', '伽马', 'gamma'],
+  ['Δδ', '德尔塔', 'delta'],
+  ['Εεϵ', '艾普西龙', 'epsilon'],
+  ['Ζζ', '泽塔', 'zeta'],
+  ['Ηη', '伊塔', 'eta'],
+  ['Θθϑ', '西塔', 'theta'],
+  ['Ιι', '约塔', 'iota'],
+  ['Κκ', '卡帕', 'kappa'],
+  ['Λλ', '拉姆达', 'lambda'],
+  ['Μμ', '缪', 'mu'],
+  ['Νν', '纽', 'nu'],
+  ['Ξξ', '克西', 'xi'],
+  ['Οο', '奥密克戎', 'omicron'],
+  ['Ππϖ', '派', 'pi'],
+  ['Ρρϱ', '柔', 'rho'],
+  ['Σσς', '西格玛', 'sigma'],
+  ['Ττ', '陶', 'tau'],
+  ['Υυ', '宇普西龙', 'upsilon'],
+  ['Φφϕ', '斐', 'phi'],
+  ['Χχ', '凯', 'chi'],
+  ['Ψψ', '普西', 'psi'],
+  ['Ωω', '欧米伽', 'omega'],
+];
+
+function greekReadingTable(column: 1 | 2): Record<string, string> {
+  const table: Record<string, string> = {};
+  for (const row of GREEK_READINGS) {
+    for (const symbol of row[0]) table[symbol] = row[column];
+  }
+  return table;
+}
+
+const ZH_GREEK_READING = greekReadingTable(1);
+const EN_GREEK_READING = greekReadingTable(2);
+const GREEK_LETTER_RE = new RegExp(`[${Object.keys(ZH_GREEK_READING).join('')}]`, 'gu');
+const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/u;
+
+/**
+ * Rewrite Greek letters into a spoken reading for TTS only.
+ *
+ * Chinese narration (any Han character) uses the classroom reading, so `π`
+ * becomes `派`. Other narration uses the English letter name (`pi`), with a
+ * space inserted when the symbol sits against an ASCII letter or digit so
+ * `2πr` is not spoken as one glued token. Text that already uses a homophone
+ * is left unchanged — this does not repair captions that were generated before
+ * the symbol-form prompt.
+ */
+export function normalizeMathSymbolsForTts(text: string): string {
+  if (!text) return text;
+  GREEK_LETTER_RE.lastIndex = 0;
+  if (!GREEK_LETTER_RE.test(text)) return text;
+  GREEK_LETTER_RE.lastIndex = 0;
+
+  const chinese = HAN_RE.test(text);
+  const table = chinese ? ZH_GREEK_READING : EN_GREEK_READING;
+  return text.replace(GREEK_LETTER_RE, (symbol, offset) => {
+    const word = table[symbol] ?? symbol;
+    if (chinese || word === symbol) return word;
+    const prev = offset > 0 ? text[offset - 1] : '';
+    const next = text[offset + symbol.length] ?? '';
+    const lead = prev && /[A-Za-z0-9]/.test(prev) ? ' ' : '';
+    const trail = next && /[A-Za-z0-9]/.test(next) ? ' ' : '';
+    return `${lead}${word}${trail}`;
+  });
+}
+
+/**
  * Split long text into chunks that respect sentence boundaries.
  * Tries splitting at sentence-ending punctuation first, then clause-level
  * punctuation, and finally hard-splits at maxLength as a last resort.

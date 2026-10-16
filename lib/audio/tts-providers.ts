@@ -119,6 +119,7 @@ import {
 import { ProviderQuotaExhaustedError } from '@/lib/server/provider-quota';
 import { appAttributionHeaders } from '@/lib/config/app-attribution';
 import { pcmS16leMonoToWav } from './pcm-wav';
+import { normalizeMathSymbolsForTts } from './tts-utils';
 
 const log = createLogger('TTSProviders');
 
@@ -302,36 +303,38 @@ export async function generateTTS(
     throw new Error(`API key required for TTS provider: ${config.providerId}`);
   }
 
+  // Captions keep the symbol. Only the provider request is pronounced.
+  const spokenText = normalizeMathSymbolsForTts(text);
   const signal = ttsRequestSignal(config.signal);
   try {
     switch (config.providerId) {
       case 'openai-tts':
-        return await generateOpenAITTS(config, text, signal);
+        return await generateOpenAITTS(config, spokenText, signal);
 
       case 'azure-tts':
-        return await generateAzureTTS(config, text, signal);
+        return await generateAzureTTS(config, spokenText, signal);
 
       case 'glm-tts':
-        return await generateGLMTTS(config, text, signal);
+        return await generateGLMTTS(config, spokenText, signal);
 
       case 'qwen-tts':
-        return await generateQwenTTS(config, text, signal);
+        return await generateQwenTTS(config, spokenText, signal);
 
       case 'voxcpm-tts':
-        return await generateVoxCPMTTS(config, text, signal);
+        return await generateVoxCPMTTS(config, spokenText, signal);
 
       case 'minimax-tts':
-        return await generateMiniMaxTTS(config, text, signal);
+        return await generateMiniMaxTTS(config, spokenText, signal);
       case 'doubao-tts':
-        return await generateDoubaoTTS(config, text, signal);
+        return await generateDoubaoTTS(config, spokenText, signal);
       case 'elevenlabs-tts':
-        return await generateElevenLabsTTS(config, text, signal);
+        return await generateElevenLabsTTS(config, spokenText, signal);
 
       case 'google-tts':
-        return await generateGoogleTTS(config, text, signal);
+        return await generateGoogleTTS(config, spokenText, signal);
 
       case 'lemonade-tts':
-        return await generateLemonadeTTS(config, text, signal);
+        return await generateLemonadeTTS(config, spokenText, signal);
 
       case 'browser-native-tts':
         throw new Error(
@@ -340,7 +343,7 @@ export async function generateTTS(
 
       default:
         if (isCustomTTSProvider(config.providerId)) {
-          return await generateOpenAITTS(config, text, signal);
+          return await generateOpenAITTS(config, spokenText, signal);
         }
         throw new Error(`Unsupported TTS provider: ${config.providerId}`);
     }

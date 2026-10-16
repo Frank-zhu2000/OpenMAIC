@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Bug Fixes
 
 - A slide image whose box has a different shape from the image is now fitted inside the box the model laid out, centered, like `object-fit: contain`. Previously the box kept its width and changed its height, so a box flatter than its image grew downward and covered the text below it. Boxes within 10% of the image's ratio, and images with unknown dimensions, are unchanged. `@openmaic/generation` 0.3.25.
+- Narration: generated speech is prompted to keep Greek letters and named constants as symbols (π, not the homophone 派) so classroom captions, the standalone HTML player, and narration export show the symbol. Keeping the symbol is best-effort: a model may still write 派, and stored 派 is left as-is. TTS requests still pronounce Greek letters (派 for Chinese, "pi" for Japanese and other non-Chinese narration) without changing the stored caption (`@openmaic/generation` 0.3.27). [#1906](https://github.com/THU-MAIC/OpenMAIC/issues/1906)
 
 ## [1.3.0-rc.1] - 2026-10-22
 

@@ -89,4 +89,52 @@ describe('Azure TTS SSML locale', () => {
     expect(ssml).toContain(`<speak version='1.0' xml:lang='${locale}'>`);
     expect(ssml).toContain(`<voice xml:lang='${locale}' name='${voice}'>`);
   });
+
+  it('pronounces π as 派 in Chinese narration and does not send the symbol', async () => {
+    await generateTTS(
+      {
+        providerId: 'azure-tts',
+        apiKey: 'azure-key',
+        baseUrl: 'https://eastus.tts.speech.microsoft.com',
+        voice: 'zh-CN-XiaoxiaoNeural',
+      },
+      '一除以π',
+    );
+
+    const ssml = mockFetch.mock.calls[0][1].body as string;
+    expect(ssml).toContain('一除以派');
+    expect(ssml).not.toContain('π');
+  });
+
+  it('pronounces π as pi in English narration and does not send the symbol', async () => {
+    await generateTTS(
+      {
+        providerId: 'azure-tts',
+        apiKey: 'azure-key',
+        baseUrl: 'https://eastus.tts.speech.microsoft.com',
+        voice: 'en-US-JennyNeural',
+      },
+      'one divided by π',
+    );
+
+    const ssml = mockFetch.mock.calls[0][1].body as string;
+    expect(ssml).toContain('one divided by pi');
+    expect(ssml).not.toContain('π');
+  });
+
+  it('picks the reading from the narration text, not the voice locale', async () => {
+    await generateTTS(
+      {
+        providerId: 'azure-tts',
+        apiKey: 'azure-key',
+        baseUrl: 'https://eastus.tts.speech.microsoft.com',
+        voice: 'en-US-JennyNeural',
+      },
+      '从负π到正π',
+    );
+
+    const ssml = mockFetch.mock.calls[0][1].body as string;
+    expect(ssml).toContain('从负派到正派');
+    expect(ssml).not.toContain('π');
+  });
 });

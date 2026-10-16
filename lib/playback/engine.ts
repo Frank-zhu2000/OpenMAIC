@@ -50,6 +50,7 @@ import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { ttsSelection } from '@/lib/audio/tts-selection';
 import { detectSpeechLang } from '@/lib/audio/browser-tts-preview';
+import { normalizeMathSymbolsForTts } from '@/lib/audio/tts-utils';
 import { createLogger } from '@/lib/logger';
 import i18n from '@/lib/i18n/config';
 
@@ -811,7 +812,7 @@ export class PlaybackEngine {
     const settings = useSettingsStore.getState();
     // The user's voice when it was picked for browser speech.
     const selectedVoice = ttsSelection()?.voice;
-    const chunkText = this.browserTTSChunks[this.browserTTSChunkIndex];
+    const chunkText = normalizeMathSymbolsForTts(this.browserTTSChunks[this.browserTTSChunkIndex]);
     const utterance = new SpeechSynthesisUtterance(chunkText);
 
     // Apply settings

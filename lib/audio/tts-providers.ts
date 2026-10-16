@@ -304,7 +304,7 @@ export async function generateTTS(
   }
 
   // Captions keep the symbol. Only the provider request is pronounced.
-  const spokenText = normalizeMathSymbolsForTts(text);
+  const spokenText = normalizeMathSymbolsForTts(text, ttsVoiceLanguage(config));
   const signal = ttsRequestSignal(config.signal);
   try {
     switch (config.providerId) {
@@ -884,6 +884,9 @@ async function generateAzureTTS(
   return await validateTTSAudioResponse(response, 'Azure', 'mp3');
 }
 
+const AZURE_VOICE_LOCALE_RE =
+  /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?-(?:[A-Z]{2}|\d{3})(?:-(?:[a-z0-9]{5,8}|\d[a-z0-9]{3}))*(?=-[A-Z]|$)/;
+
 /** Resolve the BCP-47 locale encoded by an Azure voice identifier. */
 function resolveAzureVoiceLocale(voice: string): string {
   const configuredVoice = TTS_PROVIDERS['azure-tts'].voices.find(({ id }) => id === voice);
@@ -893,11 +896,20 @@ function resolveAzureVoiceLocale(voice: string): string {
   // `en-US-JennyNeural` or `sr-Latn-RS-SophieNeural`). Preserve optional
   // script and variant subtags for voices outside the small configured list
   // while retaining the existing Chinese default for an unrecognised ID.
-  return (
-    voice.match(
-      /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?-(?:[A-Z]{2}|\d{3})(?:-(?:[a-z0-9]{5,8}|\d[a-z0-9]{3}))*(?=-[A-Z]|$)/,
-    )?.[0] ?? 'zh-CN'
-  );
+  return voice.match(AZURE_VOICE_LOCALE_RE)?.[0] ?? 'zh-CN';
+}
+
+/**
+ * Speech locale for Greek-letter readings, when the selected voice has one.
+ * An unrecognised Azure id does not fall back to zh-CN here: that default is
+ * only for the SSML language tag, and it would pronounce Japanese kanji as 派.
+ */
+function ttsVoiceLanguage(config: TTSModelConfig): string | undefined {
+  const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
+  const catalogLanguage = provider?.voices.find((voice) => voice.id === config.voice)?.language;
+  if (catalogLanguage && catalogLanguage !== 'auto') return catalogLanguage;
+  if (config.providerId === 'azure-tts') return config.voice.match(AZURE_VOICE_LOCALE_RE)?.[0];
+  return undefined;
 }
 
 /**

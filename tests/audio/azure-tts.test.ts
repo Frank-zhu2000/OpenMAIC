@@ -137,4 +137,22 @@ describe('Azure TTS SSML locale', () => {
     expect(ssml).toContain('从负派到正派');
     expect(ssml).not.toContain('π');
   });
+
+  it('does not pronounce π as 派 for a ja-JP voice, even when the line is kanji only', async () => {
+    await generateTTS(
+      {
+        providerId: 'azure-tts',
+        apiKey: 'azure-key',
+        baseUrl: 'https://eastus.tts.speech.microsoft.com',
+        voice: 'ja-JP-NanamiNeural',
+      },
+      '円周率π',
+    );
+
+    const ssml = mockFetch.mock.calls[0][1].body as string;
+    expect(ssml).toContain("xml:lang='ja-JP'");
+    expect(ssml).toContain('円周率pi');
+    expect(ssml).not.toContain('派');
+    expect(ssml).not.toContain('π');
+  });
 });

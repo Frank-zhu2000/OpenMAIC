@@ -62,31 +62,62 @@ const ZH_GREEK_READING = greekReadingTable(1);
 const EN_GREEK_READING = greekReadingTable(2);
 const GREEK_LETTER_RE = new RegExp(`[${Object.keys(ZH_GREEK_READING).join('')}]`, 'gu');
 const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/u;
+/** Hiragana and katakana. Checked before Han, as in detectLegacyLanguage. */
+const KANA_RE = /[\u3040-\u30ff]/u;
+const GREEK_CHAR = new Set(Object.keys(ZH_GREEK_READING));
+
+function primarySpeechSubtag(language: string): string {
+  return language.trim().toLowerCase().replace(/_/g, '-').split('-')[0] ?? '';
+}
+
+/** zh, zh-CN, zh-TW, zh-HK, zh-Hans, and cmn are Chinese speech locales. */
+function isChineseSpeechLang(language: string): boolean {
+  const primary = primarySpeechSubtag(language);
+  return primary === 'zh' || primary === 'cmn';
+}
+
+function isJapaneseSpeechLang(language: string): boolean {
+  return primarySpeechSubtag(language) === 'ja';
+}
+
+/**
+ * Chinese readings for a zh locale, or — when the caller did not pass ja —
+ * for Han text that contains no kana. Kana never selects 派, including when a
+ * voice tag says zh. Any other locale keeps that script check, so Chinese
+ * narration on an English-tagged voice still says 派.
+ */
+function prefersChineseGreekReading(text: string, language?: string): boolean {
+  if (KANA_RE.test(text)) return false;
+  if (language && isJapaneseSpeechLang(language)) return false;
+  if (language && isChineseSpeechLang(language)) return true;
+  return HAN_RE.test(text);
+}
 
 /**
  * Rewrite Greek letters into a spoken reading for TTS only.
  *
- * Chinese narration (any Han character) uses the classroom reading, so `π`
- * becomes `派`. Other narration uses the English letter name (`pi`), with a
- * space inserted when the symbol sits against an ASCII letter or digit so
- * `2πr` is not spoken as one glued token. Text that already uses a homophone
- * is left unchanged — this does not repair captions that were generated before
- * the symbol-form prompt.
+ * Pass `language` when the caller knows the voice or speech locale (`ja-JP`,
+ * `zh-CN`). Chinese narration uses the classroom reading, so `π` becomes `派`.
+ * Japanese and other non-Chinese narration use the English letter name (`pi`),
+ * with a space when the name sits against an ASCII letter, a digit, or another
+ * Greek letter so `2πr` and `αβ` are not spoken as one glued token. Text that
+ * already uses a homophone is left unchanged — symbol-form output is best-effort,
+ * and this does not repair a caption that already says 派.
  */
-export function normalizeMathSymbolsForTts(text: string): string {
+export function normalizeMathSymbolsForTts(text: string, language?: string): string {
   if (!text) return text;
   GREEK_LETTER_RE.lastIndex = 0;
   if (!GREEK_LETTER_RE.test(text)) return text;
   GREEK_LETTER_RE.lastIndex = 0;
 
-  const chinese = HAN_RE.test(text);
+  const chinese = prefersChineseGreekReading(text, language);
   const table = chinese ? ZH_GREEK_READING : EN_GREEK_READING;
   return text.replace(GREEK_LETTER_RE, (symbol, offset) => {
     const word = table[symbol] ?? symbol;
     if (chinese || word === symbol) return word;
     const prev = offset > 0 ? text[offset - 1] : '';
     const next = text[offset + symbol.length] ?? '';
-    const lead = prev && /[A-Za-z0-9]/.test(prev) ? ' ' : '';
+    const lead = prev && (/[A-Za-z0-9]/.test(prev) || GREEK_CHAR.has(prev)) ? ' ' : '';
     const trail = next && /[A-Za-z0-9]/.test(next) ? ' ' : '';
     return `${lead}${word}${trail}`;
   });

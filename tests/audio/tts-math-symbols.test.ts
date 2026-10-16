@@ -46,4 +46,37 @@ describe('normalizeMathSymbolsForTts', () => {
     const english = normalizeMathSymbolsForTts('2πr');
     expect(normalizeMathSymbolsForTts(english)).toBe(english);
   });
+
+  it('does not read π as 派 in Japanese narration that uses kanji and kana', () => {
+    const spoken = normalizeMathSymbolsForTts('半径がπのとき、円周は2πです。');
+    expect(spoken).toBe('半径がpiのとき、円周は2 piです。');
+    expect(spoken).not.toContain('派');
+    expect(normalizeMathSymbolsForTts('半径がπのとき、円周は2πです。', 'ja-JP')).toBe(spoken);
+  });
+
+  it('uses the English name for a ja locale even when the line is kanji only', () => {
+    expect(normalizeMathSymbolsForTts('円周率π', 'ja-JP')).toBe('円周率pi');
+    expect(normalizeMathSymbolsForTts('值π', 'ja')).toBe('值pi');
+    expect(normalizeMathSymbolsForTts('从负π到正π', 'ja-JP')).toBe('从负pi到正pi');
+  });
+
+  it('keeps Chinese readings for zh locales and for Han text without kana', () => {
+    expect(normalizeMathSymbolsForTts('从负π到正π')).toBe('从负派到正派');
+    expect(normalizeMathSymbolsForTts('π', 'zh-CN')).toBe('派');
+    expect(normalizeMathSymbolsForTts('π', 'zh-TW')).toBe('派');
+    expect(normalizeMathSymbolsForTts('π', 'zh-HK')).toBe('派');
+    expect(normalizeMathSymbolsForTts('π', 'zh')).toBe('派');
+    expect(normalizeMathSymbolsForTts('π', 'zh-Hans')).toBe('派');
+    expect(normalizeMathSymbolsForTts('2πr', 'zh-CN')).toBe('2派r');
+    expect(normalizeMathSymbolsForTts('円周率π')).toBe('円周率派');
+  });
+
+  it('does not use the Chinese reading when Japanese kana is present, even for a zh locale', () => {
+    expect(normalizeMathSymbolsForTts('半径がπです', 'zh-CN')).toBe('半径がpiです');
+  });
+
+  it('spaces adjacent Greek letter names on the English path', () => {
+    expect(normalizeMathSymbolsForTts('αβ')).toBe('alpha beta');
+    expect(normalizeMathSymbolsForTts('2πα')).toBe('2 pi alpha');
+  });
 });

@@ -17,6 +17,7 @@ import {
   saveActionResumePosition,
 } from '@/lib/playback/action-resume';
 import { setModelSettingsViewForTests } from '../helpers/model-settings-view';
+import { useSettingsStore } from '@/lib/store/settings';
 import type { Action } from '@/lib/types/action';
 import type { Scene } from '@/lib/types/stage';
 import type { ActionEngine } from '@/lib/action/engine';
@@ -83,6 +84,36 @@ function createAudioPlayer(play?: (audioId: string) => Promise<boolean>) {
 async function flushPromises() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function stubSpeechSynthesis(
+  spoken: Array<{ text: string; lang: string }>,
+  voices: Array<{ voiceURI: string; lang: string }> = [{ voiceURI: 'v1', lang: 'en-US' }],
+) {
+  vi.stubGlobal(
+    'SpeechSynthesisUtterance',
+    class {
+      text: string;
+      rate = 1;
+      volume = 1;
+      lang = 'en-US';
+      voice?: { voiceURI: string; lang: string };
+      onend?: () => void;
+      onerror?: (event: { error: string }) => void;
+      constructor(text: string) {
+        this.text = text;
+      }
+    },
+  );
+  vi.stubGlobal('window', {
+    speechSynthesis: {
+      getVoices: () => voices,
+      cancel: vi.fn(),
+      speak: vi.fn((utterance: { text: string; lang: string }) => {
+        spoken.push(utterance);
+      }),
+    },
+  });
 }
 
 function createMemoryStorage(initial: Record<string, string> = {}) {
@@ -696,6 +727,79 @@ describe('PlaybackEngine action navigation', () => {
     spoken[0].onend?.();
 
     expect(onSpeechEnd).not.toHaveBeenCalled();
+  });
+
+  it('browser TTS speaks a Chinese reading and keeps the caption symbol', async () => {
+    const spoken: Array<{ text: string; lang: string }> = [];
+    stubSpeechSynthesis(spoken);
+    setModelSettingsViewForTests({ tts: { registryId: 'browser-native-tts' } });
+
+    const { engine: actionEngine } = createActionEngine();
+    const { player } = createAudioPlayer(async () => false);
+    const onSpeechStart = vi.fn();
+    const engine = new PlaybackEngine([scene([speech('zh', '从负π到正π')])], actionEngine, player, {
+      onSpeechStart,
+    });
+
+    engine.start();
+    await flushPromises();
+
+    expect(onSpeechStart).toHaveBeenCalledWith('从负π到正π');
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].text).toBe('从负派到正派');
+    expect(spoken[0].lang).toBe('zh-CN');
+  });
+
+  it('browser TTS does not turn a Japanese kanji line into 派 or zh-CN', async () => {
+    const spoken: Array<{ text: string; lang: string }> = [];
+    stubSpeechSynthesis(spoken);
+    setModelSettingsViewForTests({ tts: { registryId: 'browser-native-tts' } });
+
+    const { engine: actionEngine } = createActionEngine();
+    const { player } = createAudioPlayer(async () => false);
+    const onSpeechStart = vi.fn();
+    const engine = new PlaybackEngine(
+      [scene([speech('ja', '半径がπのとき、円周は2πです。')])],
+      actionEngine,
+      player,
+      { onSpeechStart },
+    );
+
+    engine.start();
+    await flushPromises();
+
+    expect(onSpeechStart).toHaveBeenCalledWith('半径がπのとき、円周は2πです。');
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].text).toBe('半径がpiのとき、円周は2 piです。');
+    expect(spoken[0].text).not.toContain('派');
+    expect(spoken[0].lang).not.toBe('zh-CN');
+  });
+
+  it('browser TTS uses the selected ja-JP voice language for a kanji-only line', async () => {
+    const spoken: Array<{ text: string; lang: string }> = [];
+    stubSpeechSynthesis(spoken, [{ voiceURI: 'ja-voice', lang: 'ja-JP' }]);
+    setModelSettingsViewForTests({ tts: { registryId: 'browser-native-tts' } });
+    const previous = {
+      ttsVoice: useSettingsStore.getState().ttsVoice,
+      ttsVoiceProviderId: useSettingsStore.getState().ttsVoiceProviderId,
+    };
+    useSettingsStore.setState({ ttsVoice: 'ja-voice', ttsVoiceProviderId: 'browser-native-tts' });
+
+    try {
+      const { engine: actionEngine } = createActionEngine();
+      const { player } = createAudioPlayer(async () => false);
+      const engine = new PlaybackEngine([scene([speech('ja', '円周率π')])], actionEngine, player);
+
+      engine.start();
+      await flushPromises();
+
+      expect(spoken).toHaveLength(1);
+      expect(spoken[0].text).toBe('円周率pi');
+      expect(spoken[0].text).not.toContain('派');
+      expect(spoken[0].lang).toBe('ja-JP');
+    } finally {
+      useSettingsStore.setState(previous);
+    }
   });
 
   it('jumping to the last line completes through normal completion flow', async () => {

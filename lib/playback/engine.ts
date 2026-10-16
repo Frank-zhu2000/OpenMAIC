@@ -812,8 +812,8 @@ export class PlaybackEngine {
     const settings = useSettingsStore.getState();
     // The user's voice when it was picked for browser speech.
     const selectedVoice = ttsSelection()?.voice;
-    const chunkText = normalizeMathSymbolsForTts(this.browserTTSChunks[this.browserTTSChunkIndex]);
-    const utterance = new SpeechSynthesisUtterance(chunkText);
+    const rawChunk = this.browserTTSChunks[this.browserTTSChunkIndex];
+    const utterance = new SpeechSynthesisUtterance(rawChunk);
 
     // Apply settings
     const speed = this.callbacks.getPlaybackSpeed?.() ?? 1;
@@ -824,16 +824,21 @@ export class PlaybackEngine {
     const voices = await this.ensureVoicesLoaded();
     if (!this.isCurrentGeneration(generation)) return;
 
-    // Set voice: try user's configured voice, fall back to auto-detect language
+    // Set voice first so a ja-JP voice is not rewritten with the Chinese reading.
+    // Language detection then sees the spoken string, not extra Han from 派.
     let voiceFound = false;
+    let speechLang: string | undefined;
     if (selectedVoice && selectedVoice !== 'default') {
       const voice = voices.find((v) => v.voiceURI === selectedVoice);
       if (voice) {
         utterance.voice = voice;
         utterance.lang = voice.lang;
+        speechLang = voice.lang || undefined;
         voiceFound = true;
       }
     }
+    const chunkText = normalizeMathSymbolsForTts(rawChunk, speechLang);
+    utterance.text = chunkText;
     if (!voiceFound) {
       // No usable voice configured — detect text language so the browser
       // auto-selects an appropriate voice. For Vietnamese additionally bind an

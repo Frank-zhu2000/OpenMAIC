@@ -1211,4 +1211,90 @@ describe('browser-native lecture voice missing from the dynamic list', () => {
       resolveAgentVoice(second, 2, providers, undefined, { roster, globalVoice })?.voiceId,
     ).toBe('uri-zira');
   });
+
+  it('does not give an unbound student the voice a stale browser binding speaks', () => {
+    // Global lecture voice is David. A missing student URI speaks Xiaoxiao for
+    // zh-CN, which is neither the flagged default nor the first voice. Zira is
+    // free, so the unbound student must not be given Xiaoxiao.
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', lang: 'en-US', default: true },
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+      { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const bound = agent({
+      id: 'student-stale',
+      role: 'student',
+      voiceConfig: {
+        providerId: 'browser-native-tts',
+        voiceId: 'com.apple.voice.compact.gone',
+      },
+    });
+    const unbound = agent({ id: 'student-free', role: 'student' });
+    const roster = [teacher, bound, unbound];
+    const globalVoice = { providerId: 'browser-native-tts' as const, voiceId: 'uri-david' };
+    expect(
+      resolveAgentVoice(unbound, 2, providers, undefined, {
+        roster,
+        globalVoice,
+        utteranceLang: 'zh-CN',
+      })?.voiceId,
+    ).toBe('uri-zira');
+  });
+
+  it('does not give an unbound student the voice a student "default" sentinel speaks', () => {
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', lang: 'en-US', default: true },
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+      { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const bound = agent({
+      id: 'student-default',
+      role: 'student',
+      voiceConfig: {
+        providerId: 'browser-native-tts',
+        voiceId: 'default',
+      },
+    });
+    const unbound = agent({ id: 'student-free', role: 'student' });
+    const roster = [teacher, bound, unbound];
+    const globalVoice = { providerId: 'browser-native-tts' as const, voiceId: 'uri-david' };
+    expect(
+      resolveAgentVoice(unbound, 2, providers, undefined, {
+        roster,
+        globalVoice,
+        utteranceLang: 'zh-CN',
+      })?.voiceId,
+    ).toBe('uri-zira');
+  });
+
+  it('reserves an in-list student browser URI as itself', () => {
+    // Zira is installed. zh-CN must not replace that reservation, or the
+    // unbound student would receive Zira while Xiaoxiao stays free.
+    const providers = browserProviders([
+      { voiceURI: 'uri-david', name: 'David', lang: 'en-US', default: true },
+      { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
+      { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
+    ]);
+    const teacher = agent({ id: 'teacher', role: 'teacher' });
+    const bound = agent({
+      id: 'student-zira',
+      role: 'student',
+      voiceConfig: {
+        providerId: 'browser-native-tts',
+        voiceId: 'uri-zira',
+      },
+    });
+    const unbound = agent({ id: 'student-free', role: 'student' });
+    const roster = [teacher, bound, unbound];
+    const globalVoice = { providerId: 'browser-native-tts' as const, voiceId: 'uri-david' };
+    expect(
+      resolveAgentVoice(unbound, 2, providers, undefined, {
+        roster,
+        globalVoice,
+        utteranceLang: 'zh-CN',
+      })?.voiceId,
+    ).toBe('uri-xiaoxiao');
+  });
 });

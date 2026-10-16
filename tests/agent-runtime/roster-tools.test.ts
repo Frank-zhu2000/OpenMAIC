@@ -467,6 +467,174 @@ describe('set_roster', () => {
     expect(result.details?.error).toBe('voice-not-in-catalog');
     expect((await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs).toBeUndefined();
   });
+
+  // resolveAgentVoice returns a valid configured binding before any gender
+  // fallback, so a cross-gender catalogue voice must be refused here.
+  it('rejects a catalogue voice whose gender conflicts with voiceDesign.gender', async () => {
+    mocks.enabledServerTTSProviderIds.mockReturnValue(['openai-tts']);
+    const store = makeStore(makeDoc());
+    const voiceDesign = {
+      identity: '年轻女性学生',
+      gender: 'female' as const,
+      texture: '清亮',
+      delivery: '轻快',
+    };
+    const result = await runTool(store, 'set_roster', {
+      stageId: 'stage-test',
+      agents: [
+        { name: '林老师', role: 'teacher', persona: '耐心引导。' },
+        {
+          name: '小雨',
+          role: 'student',
+          persona: '好奇爱问。',
+          voice: 'openai-tts::echo',
+          voiceDesign,
+        },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.details).toEqual({
+      error: 'voice-gender-mismatch',
+      agent: '小雨',
+      index: 1,
+      voice: 'openai-tts::echo',
+      voiceGender: 'male',
+      designGender: 'female',
+      suggestedBindings: ['openai-tts::nova', 'openai-tts::shimmer'],
+    });
+    expect(result.content[0].text).toContain('openai-tts::echo');
+    expect(result.content[0].text).toContain('male');
+    expect(result.content[0].text).toContain('female');
+    expect((await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs).toBeUndefined();
+
+    const maleDesign = await runTool(store, 'set_roster', {
+      stageId: 'stage-test',
+      agents: [
+        {
+          name: '林老师',
+          role: 'teacher',
+          persona: '耐心引导。',
+          voice: 'openai-tts::nova',
+          voiceDesign: { ...voiceDesign, identity: '中年男教师', gender: 'male' },
+        },
+        { name: '小雨', role: 'student', persona: '好奇爱问。' },
+      ],
+    });
+    expect(maleDesign.isError).toBe(true);
+    expect(maleDesign.details).toMatchObject({
+      error: 'voice-gender-mismatch',
+      agent: '林老师',
+      index: 0,
+      voice: 'openai-tts::nova',
+      voiceGender: 'female',
+      designGender: 'male',
+    });
+    expect(maleDesign.details?.suggestedBindings).toEqual(['openai-tts::echo', 'openai-tts::onyx']);
+    expect((await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs).toBeUndefined();
+
+    const setRoster = buildTools().find((tool) => tool.name === 'set_roster');
+    expect(setRoster?.description).toContain('bound voice must match voiceDesign.gender');
+    expect(ROSTER_TOOLS_PROMPT).toContain('bound voice must match voiceDesign.gender');
+  });
+
+  it('accepts a catalogue voice whose gender matches voiceDesign.gender', async () => {
+    mocks.enabledServerTTSProviderIds.mockReturnValue(['openai-tts']);
+    const store = makeStore(makeDoc());
+    const result = await runTool(store, 'set_roster', {
+      stageId: 'stage-test',
+      agents: [
+        { name: '林老师', role: 'teacher', persona: '耐心引导。' },
+        {
+          name: '小雨',
+          role: 'student',
+          persona: '好奇爱问。',
+          voice: 'openai-tts::nova',
+          voiceDesign: {
+            identity: '年轻女性学生',
+            gender: 'female',
+            texture: '清亮',
+            delivery: '轻快',
+          },
+        },
+      ],
+    });
+
+    expect(result.isError).toBeUndefined();
+    const roster = (await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs ?? [];
+    expect(roster[1]?.voiceConfig).toEqual({ providerId: 'openai-tts', voiceId: 'nova' });
+    expect(roster[1]?.voiceDesign?.gender).toBe('female');
+  });
+
+  it('accepts a neutral or unknown voice gender and a binding with no voiceDesign.gender', async () => {
+    mocks.enabledServerTTSProviderIds.mockReturnValue(['openai-tts']);
+    const store = makeStore(makeDoc());
+    const femaleDesign = {
+      identity: '年轻女性学生',
+      gender: 'female' as const,
+      texture: '清亮',
+      delivery: '轻快',
+    };
+    const neutral = await runTool(store, 'set_roster', {
+      stageId: 'stage-test',
+      agents: [
+        { name: '林老师', role: 'teacher', persona: '耐心引导。' },
+        {
+          name: '小雨',
+          role: 'student',
+          persona: '好奇爱问。',
+          voice: 'openai-tts::alloy',
+          voiceDesign: femaleDesign,
+        },
+      ],
+    });
+    expect(neutral.isError).toBeUndefined();
+    expect(
+      (await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs?.[1]?.voiceConfig,
+    ).toEqual({ providerId: 'openai-tts', voiceId: 'alloy' });
+
+    const unknown = await runTool(
+      store,
+      'set_roster',
+      {
+        stageId: 'stage-test',
+        agents: [
+          { name: '林老师', role: 'teacher', persona: '耐心引导。' },
+          {
+            name: '小雨',
+            role: 'student',
+            persona: '好奇爱问。',
+            voice: 'openai-tts::session-voice',
+            voiceDesign: femaleDesign,
+          },
+        ],
+      },
+      {
+        registeredVoices: [{ providerId: 'openai-tts', voiceId: 'session-voice', name: 'Session' }],
+      },
+    );
+    expect(unknown.isError).toBeUndefined();
+    expect(
+      (await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs?.[1]?.voiceConfig,
+    ).toEqual({ providerId: 'openai-tts', voiceId: 'session-voice' });
+
+    const noDesignGender = await runTool(store, 'set_roster', {
+      stageId: 'stage-test',
+      agents: [
+        {
+          name: '林老师',
+          role: 'teacher',
+          persona: '耐心引导。',
+          voice: 'openai-tts::echo',
+        },
+        { name: '小雨', role: 'student', persona: '好奇爱问。' },
+      ],
+    });
+    expect(noDesignGender.isError).toBeUndefined();
+    expect(
+      (await store.loadDocument('stage-test'))?.stage?.generatedAgentConfigs?.[0]?.voiceConfig,
+    ).toEqual({ providerId: 'openai-tts', voiceId: 'echo' });
+  });
 });
 
 describe('list_voices', () => {

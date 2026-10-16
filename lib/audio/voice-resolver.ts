@@ -395,6 +395,28 @@ export function playbackVoiceAfterUnavailableFallback<
 }
 
 /**
+ * Browser id to reserve. An id on this device stays itself. The "default"
+ * sentinel and any other id missing from the dynamic list reserve the voice
+ * playback speaks for `utteranceLang`.
+ */
+function reservedBrowserVoiceId(
+  provider: ProviderWithVoices,
+  voiceId: string,
+  utteranceLang: string | undefined,
+): string | undefined {
+  if (provider.voices.some((voice) => voice.id === voiceId)) return voiceId;
+  return resolveUnmatchedBrowserVoice(
+    provider.voices.map((voice) => ({
+      voiceURI: voice.id,
+      name: voice.name,
+      lang: voice.lang,
+      default: voice.default,
+    })),
+    utteranceLang ?? BROWSER_TTS_DEFAULT_LANG,
+  )?.voiceURI;
+}
+
+/**
  * Voice an unbound teacher speaks on `provider`. The lecture voice when that
  * id is offered. A same-provider browser id that is not offered reserves the
  * voice playback assigns for that utterance lang. A stale server voice
@@ -408,19 +430,11 @@ function unboundTeacherReservedVoiceId(
 ): string | undefined {
   if (!provider) return undefined;
   if (globalVoice?.providerId === provider.providerId) {
+    if (provider.providerId === BROWSER_NATIVE_TTS_PROVIDER_ID) {
+      return reservedBrowserVoiceId(provider, globalVoice.voiceId, utteranceLang);
+    }
     if (provider.voices.some((voice) => voice.id === globalVoice.voiceId)) {
       return globalVoice.voiceId;
-    }
-    if (provider.providerId === BROWSER_NATIVE_TTS_PROVIDER_ID) {
-      return resolveUnmatchedBrowserVoice(
-        provider.voices.map((voice) => ({
-          voiceURI: voice.id,
-          name: voice.name,
-          lang: voice.lang,
-          default: voice.default,
-        })),
-        utteranceLang,
-      )?.voiceURI;
     }
     return undefined;
   }
@@ -489,7 +503,9 @@ function reservationConfiguredVoice(
 
 /**
  * Voices already taken on the fallback provider: configured bindings, the
- * teacher's playback voice, and unavailable-binding playback.
+ * teacher's playback voice, and unavailable-binding playback. A configured
+ * browser binding missing from the dynamic list reserves the voice playback
+ * speaks, not the raw id.
  */
 function reservedRosterVoiceIds(
   roster: FallbackRoster,
@@ -506,7 +522,15 @@ function reservedRosterVoiceIds(
     if (!other) continue;
     const configured = reservationConfiguredVoice(other, enabledProviders, roster.overrides);
     if (configured) {
-      if (configured.providerId === fallbackProviderId) used.add(configured.voiceId);
+      if (configured.providerId === fallbackProviderId) {
+        const fallbackProvider = enabledProviders[0];
+        used.add(
+          configured.providerId === BROWSER_NATIVE_TTS_PROVIDER_ID && fallbackProvider
+            ? (reservedBrowserVoiceId(fallbackProvider, configured.voiceId, roster.utteranceLang) ??
+                configured.voiceId)
+            : configured.voiceId,
+        );
+      }
       const played = unavailableBindingPlaybackVoiceId(
         configured,
         enabledProviders,

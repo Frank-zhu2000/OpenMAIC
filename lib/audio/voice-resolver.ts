@@ -83,7 +83,9 @@ export interface ResolveAgentVoiceOptions {
    * Agents in the same order as `agentIndex`. When present, a male/female
    * fallback with same-gender voices uses a per-gender ordinal. An ungendered
    * agent, or one with no same-gender voices, takes the next free voice in
-   * the full pool. Both skip configured voices, earlier fallbacks, and the
+   * the full pool only when the catalogue lists a male or female voice.
+   * A neutral-only or ungendered catalogue keeps the index pick. Both
+   * coordinated paths skip configured voices, earlier fallbacks, and the
    * lecture voice reserved for an unbound teacher. Teacher reservation follows
    * voiceConfig or that lecture voice, not agentVoiceOverrides. Omit the
    * roster to keep the index pick.
@@ -122,8 +124,10 @@ export interface ResolveAgentVoiceOptions {
  *    lecture voice, never a per-agent override), unavailable-binding playback,
  *    and earlier unbound agents' actual fallbacks. A gendered agent takes the
  *    next free voice in its subset; an ungendered agent, or one with no
- *    same-gender voices, takes the next free voice in the full pool. Without
- *    a roster the pick is `agentIndex` modulo the pool. Browser-native is in the pool
+ *    same-gender voices, takes the next free voice in the full pool when the
+ *    catalogue lists a male or female voice. Neutral-only and ungendered
+ *    catalogues, and any call without a roster, keep `agentIndex` modulo the
+ *    pool. Browser-native is in the pool
  *    only when the caller included it: getEnabledProvidersWithVoices excludes
  *    it, getSelectableProvidersWithVoices appends it LAST, so it is the index
  *    target only when it is the sole enabled provider.
@@ -282,11 +286,13 @@ function agentBinaryGender(agent: AgentConfig): 'male' | 'female' | undefined {
  * keeps the index pick, the same as a catalogue with no gender data. With a
  * roster, the gendered subset uses a per-gender ordinal, and an ungendered
  * agent (or one with no same-gender voices) takes the next free voice in the
- * full pool. Both skip configured voice ids of that provider, the voice an
+ * full pool only when the catalogue lists a male or female voice. Both
+ * coordinated paths skip configured voice ids of that provider, the voice an
  * unavailable binding actually plays, earlier fallbacks, and the lecture voice
  * reserved for an unbound teacher. Teacher reservation follows voiceConfig or
- * that lecture voice, not agentVoiceOverrides. This replaces `index` modulo
- * the pool. Returns null when no enabled provider can serve a voice.
+ * that lecture voice, not agentVoiceOverrides. Full-pool coordination replaces
+ * `index` modulo the pool only for catalogues with gender info. Returns null
+ * when no enabled provider can serve a voice.
  */
 export function resolveDeterministicFallbackVoice(
   enabledProviders: ProviderWithVoices[],
@@ -339,10 +345,15 @@ function resolveDeterministicFallbackVoiceCached(
         ? fallbackVoices.filter((voice) => voice.gender === agentGender)
         : [];
       const pool = sameGender.length > 0 ? sameGender : fallbackVoices;
+      // Full-pool coordination needs male/female info. Neutral-only and
+      // ungendered catalogues keep the original index pick, roster or not.
+      const catalogueHasGender = fallbackVoices.some(
+        (voice) => voice.gender === 'male' || voice.gender === 'female',
+      );
       const voiceId =
         roster && agentGender && sameGender.length > 0
           ? distinctGenderVoiceId(pool, roster, index, agentGender, enabledProviders, memo)
-          : roster
+          : roster && catalogueHasGender
             ? distinctFullPoolVoiceId(pool, roster, index, enabledProviders, memo)
             : pool[index % pool.length].id;
       resolved = {
@@ -597,9 +608,11 @@ function distinctGenderVoiceId(
 
 /**
  * Full-pool fallback when the agent has no gender, or its gender has no
- * catalogue voices. Same reservations as the gendered path, including the
- * fallback an earlier unbound agent of either gender actually speaks. The
- * next free voice wins; once the pool is exhausted the fallback ordinal wraps.
+ * catalogue voices, and the catalogue lists at least one male or female voice.
+ * Neutral-only and ungendered catalogues keep the index pick and never call
+ * this. Same reservations as the gendered path, including the fallback an
+ * earlier unbound agent of either gender actually speaks. The next free voice
+ * wins; once the pool is exhausted the fallback ordinal wraps.
  */
 function distinctFullPoolVoiceId(
   pool: Array<{ id: string }>,

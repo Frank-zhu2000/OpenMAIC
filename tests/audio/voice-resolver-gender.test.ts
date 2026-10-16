@@ -209,6 +209,53 @@ describe('resolveAgentVoice gender fallback', () => {
     }
   });
 
+  it('keeps the original index fallback for a neutral-only catalogue with a roster', () => {
+    // Google lists only neutral voices (Zephyr, Puck, ...). An unbound teacher
+    // reserves the catalogue default (Kore). On base the student at index 1
+    // still gets Puck; full-pool coordination would hand them Zephyr.
+    const loaded = getEnabledProvidersWithVoices({
+      'google-tts': { isServerConfigured: true, enabled: true },
+    });
+    const googleIsNeutralOnly =
+      loaded[0]?.providerId === 'google-tts' &&
+      loaded.length === 1 &&
+      loaded[0].voices.length > 1 &&
+      loaded[0].voices.every((voice) => voice.gender !== 'male' && voice.gender !== 'female');
+    const providers: ProviderWithVoices[] = googleIsNeutralOnly
+      ? loaded
+      : [
+          {
+            providerId: 'google-tts',
+            providerName: 'Google Gemini TTS',
+            voices: [
+              { id: 'Zephyr', name: 'Zephyr', gender: 'neutral' },
+              { id: 'Puck', name: 'Puck', gender: 'neutral' },
+              { id: 'Kore', name: 'Kore', gender: 'neutral' },
+            ],
+            modelGroups: [],
+          },
+        ];
+    expect(providers[0].voices[0]?.id).toBe('Zephyr');
+    expect(providers[0].voices[1]?.id).toBe('Puck');
+    expect(
+      providers[0].voices.every((voice) => voice.gender !== 'male' && voice.gender !== 'female'),
+    ).toBe(true);
+
+    const teacher = agent({
+      role: 'teacher',
+      voiceDesign: { identity: 'middle-aged female teacher', texture: 'warm', delivery: 'calm' },
+    });
+    const student = agent({
+      role: 'student',
+      voiceDesign: { identity: 'young male student', texture: 'bright', delivery: 'quick' },
+    });
+    const roster = [teacher, student];
+    const withRoster = resolveAgentVoice(student, 1, providers, undefined, { roster });
+    const withoutRoster = resolveAgentVoice(student, 1, providers);
+    expect(withRoster).toEqual(withoutRoster);
+    expect(withRoster?.voiceId).toBe('Puck');
+  });
+
   it('gives distinct OpenAI voices to same-gender agents whose indexes collide modulo the subset', () => {
     const providers = getEnabledProvidersWithVoices({
       'openai-tts': { apiKey: 'k', enabled: true },
@@ -724,12 +771,14 @@ describe('resolveAgentVoice gender fallback', () => {
   });
 
   it('wraps the full pool stably once every fallback voice is reserved', () => {
+    // Full-pool coordination applies only when the catalogue lists a male or
+    // female voice. These agents stay ungendered, so they still take that path.
     const two: ProviderWithVoices = {
       providerId: 'custom-tts-lab',
       providerName: 'Lab',
       voices: [
-        { id: 'v0', name: 'Zero' },
-        { id: 'v1', name: 'One' },
+        { id: 'v0', name: 'Zero', gender: 'male' },
+        { id: 'v1', name: 'One', gender: 'female' },
       ],
       modelGroups: [],
     };
@@ -1111,6 +1160,8 @@ describe('browser-native lecture voice missing from the dynamic list', () => {
       { voiceURI: 'uri-david', name: 'David', default: true },
       { voiceURI: 'uri-mark', name: 'Mark' },
     ]);
+    // Gender info keeps coordinated allocation; a neutral catalogue would use the index.
+    providers[0].voices[0].gender = 'male';
     expect(providers[0]?.voices.find((voice) => voice.default)?.id).toBe('uri-david');
     const teacher = agent({ id: 'teacher', role: 'teacher' });
     const first = agent({ id: 'student-1', role: 'student' });
@@ -1155,6 +1206,8 @@ describe('browser-native lecture voice missing from the dynamic list', () => {
       { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
       { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
     ]);
+    // Gender info keeps coordinated allocation; a neutral catalogue would use the index.
+    providers[0].voices[0].gender = 'male';
     const teacher = agent({ id: 'teacher', role: 'teacher' });
     const first = agent({ id: 'student-1', role: 'student' });
     const second = agent({ id: 'student-2', role: 'student' });
@@ -1177,6 +1230,8 @@ describe('browser-native lecture voice missing from the dynamic list', () => {
       { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
       { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
     ]);
+    // Gender info keeps coordinated allocation; a neutral catalogue would use the index.
+    providers[0].voices[0].gender = 'male';
     const teacher = agent({ id: 'teacher', role: 'teacher' });
     const first = agent({ id: 'student-1', role: 'student' });
     const second = agent({ id: 'student-2', role: 'student' });
@@ -1196,6 +1251,8 @@ describe('browser-native lecture voice missing from the dynamic list', () => {
       { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
       { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
     ]);
+    // Gender info keeps coordinated allocation; a neutral catalogue would use the index.
+    providers[0].voices[0].gender = 'male';
     const teacher = agent({ id: 'teacher', role: 'teacher' });
     const first = agent({ id: 'student-1', role: 'student' });
     const second = agent({ id: 'student-2', role: 'student' });
@@ -1277,6 +1334,8 @@ describe('browser-native lecture voice missing from the dynamic list', () => {
       { voiceURI: 'uri-xiaoxiao', name: 'Xiaoxiao', lang: 'zh-CN' },
       { voiceURI: 'uri-zira', name: 'Zira', lang: 'en-GB' },
     ]);
+    // Gender info keeps coordinated allocation; a neutral catalogue would use the index.
+    providers[0].voices[0].gender = 'male';
     const teacher = agent({ id: 'teacher', role: 'teacher' });
     const bound = agent({
       id: 'student-zira',

@@ -239,11 +239,11 @@ Requirements:
   - Use the "path" value as the avatar field in the output
 - Each agent must be assigned one color from this list: ${JSON.stringify(AGENT_COLOR_PALETTE)}
   - Each agent must have a different color
-- Each agent needs a "voiceDesign" object describing their VOCAL identity (not personality), consistent with the persona:
+- Each agent needs a "voiceDesign" object describing their VOCAL identity (not personality), written following the language directive and consistent with the persona, as short comma-free phrases:
   - "identity": gender + age + role as one short comma-free phrase in the course language (e.g. "middle-aged male teacher" when the course language is English)
   - "gender": "male" or "female" only. These two English words, never a translation, naming the same gender as identity. voiceDesign.gender is language-independent
-  - "texture": pitch + vocal quality as one short comma-free phrase (e.g. "warm low-pitched slightly husky")
-  - "delivery": emotion + pace as one short comma-free phrase (e.g. "calm measured encouraging")
+  - "texture": pitch + vocal quality as one short comma-free phrase in the course language (e.g. "warm low-pitched slightly husky" when the course language is English)
+  - "delivery": emotion + pace as one short comma-free phrase in the course language (e.g. "calm measured encouraging" when the course language is English)
 ${voicePrompt}
 
 Return a JSON object with this exact structure:

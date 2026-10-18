@@ -120,6 +120,26 @@ async function generate(agents: unknown[], extra: Partial<AgentProfilesInput> = 
   );
 }
 
+/** voiceDesign instructions, split so a language rule on identity cannot cover texture or delivery. */
+function voiceDesignLanguageBlock(prompt: string): {
+  intro: string;
+  lines: Record<'identity' | 'texture' | 'delivery' | 'gender', string>;
+} {
+  const start = prompt.indexOf('Each agent needs a "voiceDesign"');
+  const block = prompt.slice(start, prompt.indexOf('Return a JSON object', start));
+  const intro = block.slice(0, block.indexOf('\n  - "identity"'));
+  const lines = {
+    identity: '',
+    texture: '',
+    delivery: '',
+    gender: '',
+  };
+  for (const field of ['identity', 'texture', 'delivery', 'gender'] as const) {
+    lines[field] = block.split('\n').find((entry) => entry.includes(`"${field}":`)) ?? '';
+  }
+  return { intro, lines };
+}
+
 function voiceListFromPrompt(): Array<{ name: string; gender?: VoiceGender }> {
   const prompt = callLLM.mock.calls.at(-1)?.[0].prompt as string;
   const marker = 'from this list: ';
@@ -157,7 +177,14 @@ describe('agent profiles — voice gender', () => {
     expect(prompt).toContain("The voice's gender must match the agent's voiceDesign.identity");
     expect(prompt).toContain("Keep the agent's name and persona consistent with that gender");
     expect(prompt).toContain('"gender": "male" | "female"');
-    expect(prompt).toContain('course language');
+    const voiceDesign = voiceDesignLanguageBlock(prompt);
+    // The whole descriptor follows the course language. A note on identity alone does not.
+    expect(voiceDesign.intro).toContain('written following the language directive');
+    for (const field of ['identity', 'texture', 'delivery'] as const) {
+      expect(voiceDesign.lines[field]).toContain('in the course language');
+    }
+    expect(voiceDesign.lines.gender).toContain('language-independent');
+    expect(voiceDesign.lines.gender).not.toContain('in the course language');
     const list = voiceListFromPrompt();
     expect(list).toEqual(
       expect.arrayContaining([

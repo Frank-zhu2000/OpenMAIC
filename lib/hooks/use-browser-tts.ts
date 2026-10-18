@@ -5,7 +5,6 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { BROWSER_TTS_DEFAULT_LANG, resolveUnmatchedBrowserVoice } from '@/lib/audio/browser-voice';
 
 // Note: Window.SpeechSynthesis declaration is already in the global scope
 
@@ -27,7 +26,7 @@ export function useBrowserTTS(options: UseBrowserTTSOptions = {}) {
     rate = 1.0,
     pitch = 1.0,
     volume = 1.0,
-    lang = BROWSER_TTS_DEFAULT_LANG,
+    lang = 'zh-CN',
   } = options;
 
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -76,15 +75,12 @@ export function useBrowserTTS(options: UseBrowserTTSOptions = {}) {
       utterance.volume = volume;
       utterance.lang = lang;
 
-      // An in-list URI is spoken as itself. The sentinel and a missing URI
-      // get the same concrete voice the roster reserves for this lang.
-      const matched =
-        voiceURI && voiceURI !== 'default'
-          ? availableVoices.find((voice) => voice.voiceURI === voiceURI)
-          : undefined;
-      const voice = matched ?? resolveUnmatchedBrowserVoice(availableVoices, lang);
-      if (voice) {
-        utterance.voice = voice;
+      // Set voice if specified
+      if (voiceURI) {
+        const voice = availableVoices.find((v) => v.voiceURI === voiceURI);
+        if (voice) {
+          utterance.voice = voice;
+        }
       }
 
       utterance.onstart = () => {

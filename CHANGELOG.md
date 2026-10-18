@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Course generation passes each catalogue voice's `gender` into the voice list and asks the model to pick a voice whose gender matches the agent, keeping the agent's name and persona consistent with that gender. `voiceDesign.gender` (`male` or `female`) is part of the agent DSL, the export sanitizer, and `set_roster`, so a course-language identity can still drive the match. When the model's voice is missing or invalid, playback falls back by index within that gender. A catalogue with no male/female data, or an agent whose gender is unknown, keeps the previous full-list index pick. [#1084](https://github.com/THU-MAIC/OpenMAIC/issues/1084)
+
 ## [1.2.0-rc.2] - 2026-10-11
 
 ### Security

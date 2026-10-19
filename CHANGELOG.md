@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **The built-in Veo video provider (`veo`) is removed.** Google shuts down all three Veo 3.1 preview models (`veo-3.1-generate-preview`, `veo-3.1-fast-generate-preview`, `veo-3.1-lite-generate-preview`) on October 22, 2026, and they were the provider's last models (Veo 3.0 and 2.0 were removed in [#1939](https://github.com/THU-MAIC/OpenMAIC/pull/1939)). Support for Google's replacement, `gemini-omni-1.1-flash`, is tracked in [#1940](https://github.com/THU-MAIC/OpenMAIC/issues/1940).
+  - Pick another video provider in **Course Model Config → Video**, or assign `slots.video` to one in `openmaic.yml`. Veo 3.1 stays available through OpenRouter Video (`google/veo-3.1`), which OpenRouter serves from Vertex AI and is not part of this shutdown.
+  - Existing configurations keep loading. An `openmaic.yml` provider with `preset: veo` no longer stops the server: it resolves nothing, every slot that named it follows its parent again, and a startup notice asks to remove it. Workspace settings that chose a Veo provider fall back the same way. `VIDEO_VEO_API_KEY`, `VIDEO_VEO_MODELS` and `VIDEO_VEO_BASE_URL` are ignored, with a startup notice when set; a `video.veo` entry in `server-providers.yml` is not carried over.
+
 ### Added
 
 - Course generation passes each catalogue voice's `gender` into the voice list and asks the model to pick a voice whose gender matches the agent, keeping the agent's name and persona consistent with that gender. `voiceDesign.gender` (`male` or `female`) is part of the agent DSL, the export sanitizer, and `set_roster`, so a course-language identity can still drive the match. When the model's voice is missing or invalid, playback falls back by index within that gender. A catalogue with no male/female data, or an agent whose gender is unknown, keeps the previous full-list index pick. [#1084](https://github.com/THU-MAIC/OpenMAIC/issues/1084)

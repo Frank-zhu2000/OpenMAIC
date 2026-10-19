@@ -17,8 +17,6 @@
  * - veo-3.1-generate-preview
  * - veo-3.1-fast-generate-preview
  * - veo-3.1-lite-generate-preview
- * - veo-3.0-generate-001, veo-3.0-fast-generate-001  (deprecated)
- * - veo-2.0-generate-001                             (legacy)
  *
  * Authentication: x-goog-api-key header
  *
@@ -33,12 +31,13 @@ import type {
   VideoGenerationResult,
 } from '../types';
 import { mediaFetchFor } from '../media-fetch';
+import { MAX_PROVIDER_MEDIA_BYTES, readResponseBodyWithLimit } from '../bounded-download';
 import { connectivityHttpFailure, connectivityTransportFailure } from '../probe-auth';
 import { runPolledTask, type TerminalResult, type PolledTaskControl } from '../polled-task';
 import { assertNotRedirected } from '../redirect-guard';
 import { requireModel } from '../require-model';
 
-const DEFAULT_MODEL = 'veo-3.0-generate-001';
+const DEFAULT_MODEL = 'veo-3.1-generate-preview';
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 const POLL_INTERVAL_MS = 10_000; // 10 seconds
 const MAX_POLL_ATTEMPTS = 60; // 10 minutes max
@@ -128,8 +127,11 @@ async function downloadVideo(
   }
 
   const mimeType = response.headers.get('content-type') || 'video/mp4';
-  const buffer = await response.arrayBuffer();
-  return `data:${mimeType};base64,${Buffer.from(buffer).toString('base64')}`;
+  const clip = await readResponseBodyWithLimit(response, {
+    maxBytes: MAX_PROVIDER_MEDIA_BYTES,
+    label: 'Veo video download',
+  });
+  return `data:${mimeType};base64,${clip.toString('base64')}`;
 }
 
 async function resolveCompletedOperation(

@@ -10,6 +10,141 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Course generation passes each catalogue voice's `gender` into the voice list and asks the model to pick a voice whose gender matches the agent, keeping the agent's name and persona consistent with that gender. `voiceDesign.gender` (`male` or `female`) is part of the agent DSL, the export sanitizer, and `set_roster`, so a course-language identity can still drive the match. When the model's voice is missing or invalid, playback falls back by index within that gender. A catalogue with no male/female data, or an agent whose gender is unknown, keeps the previous full-list index pick. [#1084](https://github.com/THU-MAIC/OpenMAIC/issues/1084)
 
+## [1.2.1] - 2026-10-18
+
+1.2.1 is a regular patch release. Its main theme is web research: Kimi, DeepSeek and Firecrawl join as web-search providers, and a new `webFetch` slot lets the agent's `fetch_url` tool use a hosted reader instead of the built-in one. It also contains one breaking change, the removal of the legacy director-graph classroom chat ([#1913](https://github.com/THU-MAIC/OpenMAIC/pull/1913)), and removes retired models from the built-in catalogs ([#1939](https://github.com/THU-MAIC/OpenMAIC/pull/1939)). Read **Breaking Changes** before upgrading from 1.2.0.
+
+### Breaking Changes
+
+- **The legacy director-graph classroom chat is removed; classroom chat always runs on Pi.** [#1913](https://github.com/THU-MAIC/OpenMAIC/pull/1913)
+  - Pi needs a Classroom model with tool calling: select one for **Classroom** in **Course Model Config**, or set the `classroom` slot (or the `llm` slot it inherits from) in `openmaic.yml`. For Gemini, use the native `google` preset.
+  - Remove `NEXT_PUBLIC_PI_CHAT_ENABLED`. A production build accepts only unset, an empty string, `true` or `1` (exact match) and fails with migration guidance on any other value. The Docker build arg and its Compose forwarding remain only to carry the value to that check.
+  - `POST /api/chat` is removed and answers `404`. With `ACCESS_CODE` set, an unauthenticated request still gets `401` first.
+
+### Highlights
+
+- **Web research.** Every new provider is opt-in or must be assigned; existing search defaults and the keyless `builtin` reader stay as they are.
+  - **`webFetch` slot.** The reader behind the agent's `fetch_url` tool is now a capability slot with its own provider registry. It defaults to `builtin` (the existing local reader); `webFetch: null` in `openmaic.yml` removes the tool. Kimi is the first hosted reader, reusing the `kimi` or `kimi-coding-plan` credentials. Choose the reader in **Course Model Config → Web Fetch** and enter keys in **Settings → Model Services → Web Fetch**. URL and private-address checks run before a URL reaches a hosted reader and again on the final URL it reports; each request uses one reader, with no fallback. [#1912](https://github.com/THU-MAIC/OpenMAIC/pull/1912)
+  - **Kimi web search.** Shares the Kimi chat key and base URL; Open Platform keys use Search Pro and Coding Plan keys use the Coding Plan search endpoint. A Kimi chat key alone does not enable search: set `WEB_SEARCH_KIMI_ENABLED=true`, add `web-search.kimi` to `server-providers.yml`, or, with `openmaic.yml`, assign `slots.webSearch` to a `kimi` provider. `WEB_SEARCH_KIMI_ENABLED=false` turns it off. [#1911](https://github.com/THU-MAIC/OpenMAIC/pull/1911)
+  - **Token plans can declare web fetch.** Connecting Kimi Coding Plan in **Settings → Token Plan** now assigns web fetch to the plan alongside chat and web search, taking over the implicit `builtin` default without a conflict prompt; disconnecting returns to the server default. Lock the `webFetch` slot to keep `builtin`. [#1927](https://github.com/THU-MAIC/OpenMAIC/pull/1927)
+  - **DeepSeek web search and fetch.** The `deepseek` preset reuses `DEEPSEEK_API_KEY` and its API base for both tools. Opt in to search with `WEB_SEARCH_DEEPSEEK_ENABLED=true`, a `web-search.deepseek` entry, or an explicit `webSearch` slot; assign `webFetch: deepseek` in `openmaic.yml` for fetch. [#1937](https://github.com/THU-MAIC/OpenMAIC/pull/1937)
+  - **Firecrawl web search and fetch.** One `firecrawl` provider (`preset: firecrawl`) serves both `webSearch` and `webFetch` with one key. `FIRECRAWL_API_KEY` / `FIRECRAWL_BASE_URL` configure it in legacy setups, where it comes last in the search preference order; web fetch stays on `builtin` until `webFetch` is assigned to it. A self-hosted Firecrawl base must be declared in `openmaic.yml`. [#1931](https://github.com/THU-MAIC/OpenMAIC/pull/1931) [#1834](https://github.com/THU-MAIC/OpenMAIC/pull/1834) (by @JuampiHernandez)
+
+### Features
+
+- Classroom chat: `cue_user` can offer 2 to 4 suggested replies, shown as one row of buttons in the roundtable. Choosing one sends it as an ordinary learner message; learners can still type their own reply. [#1379](https://github.com/THU-MAIC/OpenMAIC/pull/1379) (by @yanpgwang)
+
+### Bug Fixes
+
+- Chat: on plain HTTP at a non-localhost address (a LAN or Tailscale IP, for example), where the browser has no Web Locks, classroom chats failed to load and every save retried in a loop. Chats now save and load there; two tabs on the same chat resolve last-write-wins. The deployment guide recommends HTTPS for phones and tablets. [#1929](https://github.com/THU-MAIC/OpenMAIC/pull/1929)
+- i18n: the server picks the initial language from the locale cookie, then `Accept-Language`, and sets `<html lang>` to match, so server and client render the same language: a browser in another language no longer gets Chinese server HTML that switches after load. `/` and `/_not-found` now render dynamically. [#1874](https://github.com/THU-MAIC/OpenMAIC/pull/1874) (by @costajohnt)
+- Generation: a non-numeric or non-finite shape `rotate` is reported as a model-output error with its element path instead of silently becoming `0`; a missing or `null` angle still means `0` (`@openmaic/generation` 0.3.21). [#1891](https://github.com/THU-MAIC/OpenMAIC/pull/1891) (by @Hahaa909)
+- Roundtable: the suggested-reply bubble no longer appears stacked with the outgoing chat bubble and then jumps down; it appears once, in place, after the previous bubble has left. [#1943](https://github.com/THU-MAIC/OpenMAIC/pull/1943)
+
+### Packages
+
+- `@openmaic/generation` 0.3.21 (was 0.3.20). Other packages are unchanged from 1.2.0.
+
+### Known issues
+
+- Google shuts down the Veo 3.1 previews on October 22, 2026; after that the built-in Veo provider has no working model. [#1940](https://github.com/THU-MAIC/OpenMAIC/issues/1940)
+- Qwen voice cloning still uses a retired model, so registering or synthesizing a cloned voice fails until it moves to CosyVoice; `TTS_QWEN_VOICE_CLONE_MODEL` can point to another model. [#1941](https://github.com/THU-MAIC/OpenMAIC/issues/1941)
+- Volcengine Ark Agent Plan models report no image input, so reference images are dropped for them. [#1942](https://github.com/THU-MAIC/OpenMAIC/issues/1942)
+
+### Other Changes
+
+- Models: remove retired entries from the built-in catalogs and presets (existing saved IDs remain user-managed): [#1939](https://github.com/THU-MAIC/OpenMAIC/pull/1939)
+  - deepseek: `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`. Use `deepseek-flash`.
+  - qwen: `qwen3.6-max-preview`, `qwen3-max`. Use `qwen3.7-max`.
+  - kimi: `kimi-k2.5`, `kimi-k2-thinking`. Use `kimi-k3`.
+  - siliconflow: `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B`, `Pro/moonshotai/Kimi-K2.5`, `THUDM/GLM-4.1V-9B-Thinking`, `THUDM/GLM-Z1-Rumination-32B-0414`. Use an available model from the provider catalog.
+  - grok: `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning`, `grok-code-fast-1`. Use `grok-4.3` or `grok-build-0.1`.
+  - grok-image: `grok-imagine-image-pro`. Use `grok-imagine-image`.
+  - tencent-hunyuan: `hy3-preview`; also remove `hunyuan-2.0-thinking-20251109` and `hunyuan-2.0-instruct-20251111` from environment examples. Use `hy3`.
+  - xiaomi: `mimo-v2-pro`, `mimo-v2-omni`, `mimo-v2-flash`. Use `mimo-v2.6-pro` or `mimo-v2.6-flash`.
+  - doubao: `doubao-seed-1-8-251228`. Use `doubao-seed-evolving`.
+  - seedream: `doubao-seedream-3-0-t2i-250415`. Use `doubao-seedream-5-0-260128`.
+  - seedance: `doubao-seedance-1-5-pro-251215`. Use `doubao-seedance-2-0-mini-260615`. Keep `doubao-seedance-1-0-lite-t2v-250428` while its status is Retiring, not Shutdown.
+  - qwen-image: `qwen-image-max`, `qwen-image-max-2025-12-30`, `qwen-image-plus`, `qwen-image-plus-2026-01-09`, `qwen-image`. Use `qwen-image-3.0`.
+  - nano-banana: `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview`. Use `gemini-nano-banana-2.1` or `gemini-3-pro-image`.
+  - veo: `veo-3.0-fast-generate-001`, `veo-3.0-generate-001`, `veo-2.0-generate-001`. Use `veo-3.1-generate-preview` (scheduled to retire October 22, 2026).
+  - qwen-tts: `qwen3-tts-instruct-flash`, `qwen-tts`. Use `qwen3-tts-flash`.
+  - Ark Agent Plan doubao: `doubao-seed-2.1-turbo`, `doubao-seed-2.0-pro`, `doubao-seed-2.0-code`, `doubao-seed-2.0-lite`, `deepseek-v3.2`, `minimax-m2.7`, `glm-5.2`, `glm-5.1`, `kimi-k2.6`. Use `doubao-seed-2.1-pro`, `deepseek-v4-pro` or `minimax-m3`.
+  - Ark Agent Plan seedream: `doubao-seedream-5.0-lite`. Use `doubao-seedream-5.0-pro`.
+  - Ark Agent Plan seedance: `doubao-seedance-1.5-pro`. Use `doubao-seedance-2.0-mini`.
+  - Removed IDs that vendors route to a catalog successor resolve to it for capability lookups, so saved configurations keep image input, thinking controls and reasoning replay: `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` → `deepseek-flash`, `hy3-preview` → `hy3`, `grok-code-fast-1` → `grok-build-0.1`, Ark Agent Plan `glm-5.2` → `glm-5.3`.
+  - `grok-4-1-fast*` (served as `grok-4.3` at a fixed reasoning effort) and SiliconFlow `Pro/moonshotai/Kimi-K2.5` remain valid in saved configurations. They lose catalog capability metadata, including image input and thinking controls; reselect a replacement model to restore that metadata.
+  - Retain `qwen3-tts-vc-2026-01-22` as the non-selectable grouping ID for saved cloned voices. The model has retired: clone registration and synthesis fail until migration to CosyVoice. `TTS_QWEN_VOICE_CLONE_MODEL` can point to another model.
+  - Keep upcoming retirements in the catalog: MiMo V2.5 / V2.5 Pro on October 21, 2026; Veo 3.1 Fast / Standard / Lite previews and Doubao Seed 2.0 Lite / Mini on October 22, 2026; `gpt-image-1` on October 23, 2026. Google's recommended Veo replacement, `gemini-omni-1.1-flash`, is not yet supported by the Veo adapter.
+  - Ark Agent Plan: add the officially listed migration targets `doubao-seed-2.1-lite`, `glm-5.3`, `kimi-k3` and `kimi-k2.8-preview` (the Small-tier replacement for `kimi-k2.7-code`).
+  - Keep models with future retirement dates and unverified entries; update image/video probe defaults and refresh the documented model tables.
+
+- Dependencies: `@langchain/langgraph` is no longer installed. [#1913](https://github.com/THU-MAIC/OpenMAIC/pull/1913)
+- Docs: `CONTRIBUTING.md` documents how app release versions are chosen. [#1938](https://github.com/THU-MAIC/OpenMAIC/pull/1938)
+
+## [1.2.0] - 2026-10-16
+
+1.2.0 is the **server-first** release. Course generation, model configuration, courses and media, and identity move to the server, and the browser becomes a client. It needs PostgreSQL and a long-running Node.js server; serverless hosts, Vercel included, stay on 1.1.x. This section collects what is new in 1.2.0 beyond the rc.1 and rc.2 sections below, including classroom export, which landed before rc.2 but was not recorded there. Coming from 1.1.x:
+
+- Read **Breaking Changes** and **Before you upgrade** under [1.2.0-rc.1](#120-rc1---2026-10-04): `DATABASE_URL` is required, `MODEL_ROUTES` without `openmaic.yml` stops the server at startup, the browser no longer sends provider settings, and `POST /api/generate-classroom` takes `{ requirement, materialIds? }`.
+- Back up the database, choose an identity mode before the first start, keep `data/`, and set `OPENMAIC_SECRET_KEY` when several instances share the database.
+- Read the breaking change under [1.2.0-rc.2](#120-rc2---2026-10-11): every provider with server-managed credentials needs an explicit model list (`*_MODELS`, or `models` in `openmaic.yml`), and the render-service must be upgraded together with or before the app.
+- Pi classroom chat now refuses models that cannot call tools and Google's OpenAI-compatible Gemini endpoint (see **Behavior Changes**).
+- The deployment guide's [Upgrading from 1.1.x](packages/docs/content/docs/deployment.mdx#upgrading-from-11x) table lists every step.
+
+### Highlights
+
+- **Classroom export.** New since 1.2.0-rc.1, first recorded here.
+  - **The PPTX keeps the whole lesson.** Interactive, quiz and PBL scenes stay where they are in the lesson as placeholder slides with an **Open online** button and a QR code that open the scene in the online classroom; quiz placeholders list the question stems, PBL placeholders the goal and milestones. **Export PPTX** and **Export Resource Pack** become submenus: with placeholder slides (recommended) or slides only. [#1811](https://github.com/THU-MAIC/OpenMAIC/pull/1811) [#1819](https://github.com/THU-MAIC/OpenMAIC/pull/1819) [#1823](https://github.com/THU-MAIC/OpenMAIC/pull/1823) [#1693](https://github.com/THU-MAIC/OpenMAIC/pull/1693) (menu refactor by @Tiyatrotist)
+  - **Offline HTML.** **Export as HTML** produces one self-contained file that plays the classroom without a network connection: narration with captions, spotlight and laser, auto-advancing slides, slide video, discussion cards and interactive widget actions. Quiz, interactive and PBL scenes hold after their narration until the learner moves on. Choose **With narration and video** or **Without narration**. When JavaScript does not run, the file shows a short message instead of a blank page. [#1813](https://github.com/THU-MAIC/OpenMAIC/pull/1813) [#1842](https://github.com/THU-MAIC/OpenMAIC/pull/1842) [#1848](https://github.com/THU-MAIC/OpenMAIC/pull/1848) [#1850](https://github.com/THU-MAIC/OpenMAIC/pull/1850)
+  - **Large classrooms.** A classroom that would exceed 400 MB as one file is exported as a ZIP of `classroom.html` with `audio/`, `media/` and `images/` folders; extract it before opening `classroom.html`. [#1845](https://github.com/THU-MAIC/OpenMAIC/pull/1845)
+  - Related fixes: line charts keep their lines in Safari (`@openmaic/renderer` 0.1.12) [#1825](https://github.com/THU-MAIC/OpenMAIC/pull/1825); offline exports drop web-font fallbacks instead of logging a CSP error for each [#1826](https://github.com/THU-MAIC/OpenMAIC/pull/1826); narration is labelled by its real audio container, which also stops WAV clips in `.maic.zip` exports from showing a 12-hour duration in Safari [#1842](https://github.com/THU-MAIC/OpenMAIC/pull/1842).
+- **Inline math survives saving.** Formulas typed in the slide text editor are stored as their LaTeX source and typeset by the clients, instead of being flattened on save and losing the source; the server never typesets authored input, and a formula over 2000 characters is shown as LaTeX text. Render-service slide previews typeset them with KaTeX styles (`@openmaic/renderer` 0.1.14), and the PPTX export writes each inline formula as one run of LaTeX text. [#1829](https://github.com/THU-MAIC/OpenMAIC/pull/1829) [#1904](https://github.com/THU-MAIC/OpenMAIC/pull/1904)
+
+### Behavior Changes
+
+- Pi classroom chat refuses a model whose catalogue entry says it cannot call tools, before inference, with `400 MODEL_CONFIG_INVALID` (`reason: tool_calling_required`) and a localized explanation; Course Model Config notes the requirement on the classroom slot. Legacy chat, quiz grading and PBL are unaffected. [#1894](https://github.com/THU-MAIC/OpenMAIC/pull/1894)
+- Pi classroom chat refuses Google's official OpenAI-compatible Gemini endpoint (`generativelanguage.googleapis.com/v1beta/openai`) with `400 MODEL_CONFIG_INVALID` (`reason: gemini_native_required`). Configure Gemini with the native `google` preset; the configuration guides describe the move. [#1897](https://github.com/THU-MAIC/OpenMAIC/pull/1897)
+
+### Features
+
+- Image generation: GLM (Zhipu CogView) provider `glm-image`, with `cogview-3-flash` (default) and `cogview-4`. Configure it with `IMAGE_GLM_API_KEY` or in `openmaic.yml`. [#1832](https://github.com/THU-MAIC/OpenMAIC/pull/1832) (by @Cham1229)
+- Settings: user-editable provider credentials (language model, speech, transcription, web search, image, video and document services) show a notice that the key is sent to the server hosting this instance, so it should be entered only on a deployment you trust. [#1158](https://github.com/THU-MAIC/OpenMAIC/pull/1158) (by @yipwingtim)
+- Embedders: `configureGenerationRunHooks`, registered once at boot like `configurePersistenceHooks`, lets a host admit or refuse run starts (`authorizeStart`), run each execution in its own async context (`wrapExecution`), mark its own failures non-retryable (`classifyFailure`) and receive run events (`onRunEvent`). Nothing changes when no hooks are registered. [#1807](https://github.com/THU-MAIC/OpenMAIC/pull/1807)
+
+### Security
+
+- Agent: user-authored skill content is enclosed in a closing marker derived from its content hash, so a skill body can no longer fake the end of its user-authored block or close the skill envelope early. [#1816](https://github.com/THU-MAIC/OpenMAIC/pull/1816)
+- Math: the app's KaTeX and Temml render paths (slides, whiteboard, quizzes, editor, chat Markdown, PPTX export, importer, offline exports) disable formula-defined macros (`\def`, `\newcommand`, `\let`, …), force `trust: false` and cap `maxExpand`, so a short formula cannot expand into an expensive render (`safeKatexOptions` in `@openmaic/dsl` 0.11.3). Generated interactive pages keep their own KaTeX auto-render settings; that script runs inside the sandboxed interactive frame, not in the app. [#1827](https://github.com/THU-MAIC/OpenMAIC/pull/1827)
+- Sanitizer: inline style values containing a backslash are refused, so CSS escapes cannot get past the blocked-token check. Defence in depth: no URL-accepting property is currently allowed. [#1815](https://github.com/THU-MAIC/OpenMAIC/pull/1815)
+
+### Bug Fixes
+
+- Server: a long-running server no longer slows down with every request it serves. Each request's owner-bound document store created its own `AsyncLocalStorage`, which stays registered for the life of the process, so the cost of every promise grew until the event loop stalled; all stores now share one. [#1871](https://github.com/THU-MAIC/OpenMAIC/pull/1871)
+- Generation: an explicit provider plan or balance exhaustion is reported as `PROVIDER_QUOTA_EXHAUSTED`, with localized guidance and Retry on the generation preview and classroom failure cards, and is no longer retried within a model call or step. A configured LLM fallback is still used; ordinary 429s keep their retries. [#1831](https://github.com/THU-MAIC/OpenMAIC/pull/1831) [#1861](https://github.com/THU-MAIC/OpenMAIC/pull/1861) (by @YizukiAme)
+- Generation: images sent to vision calls (outline, scene content, scene actions, PBL evaluation) that are over 1 MiB of base64 or 2048 px, animated, CMYK, 16-bit or in another format are re-encoded as JPEG within those limits; an image that still does not fit or cannot be decoded is dropped with a warning instead of failing the step. Data URLs are parsed without a regex (`@openmaic/generation` 0.3.19). [#1902](https://github.com/THU-MAIC/OpenMAIC/pull/1902)
+- Generation: interactive pages publish one explicit current state and games build their state before the first render, Start or reset, so generated pages no longer abort initialization (`@openmaic/generation` 0.3.16). [#1795](https://github.com/THU-MAIC/OpenMAIC/pull/1795) (by @Ethereal49)
+- Generation: a model-supplied rotation of a generated slide shape is kept instead of reset to zero, and the slide prompt defines rotation (degrees, clockwise around the centre) (`@openmaic/generation` 0.3.18, 0.3.20). [#1855](https://github.com/THU-MAIC/OpenMAIC/pull/1855) [#1872](https://github.com/THU-MAIC/OpenMAIC/pull/1872) (by @Hahaa909)
+- Workbench: a material over the server's upload cap is refused in the browser before any bytes are sent, with the "file too large" message, instead of after a full upload behind a buffering proxy. [#1887](https://github.com/THU-MAIC/OpenMAIC/pull/1887)
+- Import: a ZIP classroom import no longer deletes the course it just created when the server committed the write but the response was lost. [#1864](https://github.com/THU-MAIC/OpenMAIC/pull/1864) (by @Duang777)
+- Pi classroom chat: malformed table, code and slide reference snapshots and empty members of `storeState.scenes` answer `400 INVALID_REQUEST` instead of a `500` or a failed stream. [#1752](https://github.com/THU-MAIC/OpenMAIC/pull/1752) [#1893](https://github.com/THU-MAIC/OpenMAIC/pull/1893) (by @Frank-zhu2000)
+- Speech: a client-supplied TTS base URL on a local network is refused with a message that no longer suggests `ALLOW_LOCAL_NETWORKS`, which does not apply to client-supplied endpoints; such a service has to be configured by the operator. [#1798](https://github.com/THU-MAIC/OpenMAIC/pull/1798) (by @mvanhorn)
+- Renderer: cancelling idle typesetting uses the scheduling pair it started with. This unblocked publishing `@openmaic/renderer` 0.1.14 and `@openmaic/editor` 0.0.11; renderer 0.1.13 was never published. [#1901](https://github.com/THU-MAIC/OpenMAIC/pull/1901)
+
+### Packages
+
+- New since rc.2: `@openmaic/renderer` 0.1.14 (0.1.13, referenced by rc.2, was never published) and `@openmaic/generation` 0.3.20 (rc.2 had 0.3.18). `@openmaic/editor` 0.0.11 is the version rc.2 referenced, first published with this release. Unchanged from rc.2: `@openmaic/dsl` 0.11.3, `@openmaic/importer` 0.3.1 and `@openmaic/storage` 0.37.3.
+
+### Known issues
+
+- On iPhone, an exported HTML file does not play inside WeChat or the Files preview; open it in Safari or another browser. [#1847](https://github.com/THU-MAIC/OpenMAIC/issues/1847)
+- Long formulas in an exported PPTX may wrap onto several lines in PowerPoint and WPS. [#1905](https://github.com/THU-MAIC/OpenMAIC/issues/1905)
+- With the renderer-based editor off (`NEXT_PUBLIC_MAIC_EDITOR_RENDERER_ENABLED`), the legacy canvas editor flattens the inline formulas in a text box to plain text when that text is edited. [#1868](https://github.com/THU-MAIC/OpenMAIC/issues/1868)
+
+### Other Changes
+
+- Tests and CI: the suite runs reliably on Windows and newer Node.js runtimes and under load, boot tests no longer start real background workers, and the PostgreSQL CI job runs every app contract suite. [#1803](https://github.com/THU-MAIC/OpenMAIC/pull/1803) [#1828](https://github.com/THU-MAIC/OpenMAIC/pull/1828) [#1890](https://github.com/THU-MAIC/OpenMAIC/pull/1890) [#1867](https://github.com/THU-MAIC/OpenMAIC/pull/1867) [#1907](https://github.com/THU-MAIC/OpenMAIC/pull/1907) (with @Cham1229, @BeAIcoder and @YizukiAme)
+
 ## [1.2.0-rc.2] - 2026-10-11
 
 ### Security

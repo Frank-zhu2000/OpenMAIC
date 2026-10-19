@@ -15,7 +15,7 @@ const K = 1024;
  * another provider's catalog keep that row's stored counts when they encode
  * the same limits.
  */
-const VISION_ON: Record<string, { contextWindow: number; outputWindow: number }> = {
+const VISION_ON: Record<string, { contextWindow: number; outputWindow?: number }> = {
   // 1024k / 256k. Not the dated direct snapshot (256k / 32k).
   'doubao-seed-2.1-pro': { contextWindow: 1024 * K, outputWindow: 256 * K },
   // Model list: doubao-seed-2-1-lite is 多模态理解. Plan table: 1024k / 256k.
@@ -26,8 +26,10 @@ const VISION_ON: Record<string, { contextWindow: number; outputWindow: number }>
   'minimax-m3': { contextWindow: 1024 * K, outputWindow: 128 * K },
   // 原生支持视觉理解. Kimi catalog already stores 1024k / 128k.
   'kimi-k3': { contextWindow: 1024 * K, outputWindow: 128 * K },
-  // 支持文本和图片输入. Plan table: 1024k / 1024k. No native catalog row.
-  'kimi-k2.8-preview': { contextWindow: 1024 * K, outputWindow: 1024 * K },
+  // 支持文本和图片输入. Plan table: 1024k / 1024k. Callers forward
+  // outputWindow as max_tokens and do not subtract the prompt, so a cap equal
+  // to the context window is omitted.
+  'kimi-k2.8-preview': { contextWindow: 1024 * K },
   // 支持多模态视觉理解. Kimi catalog stores 256k context as 256000 and 32k output as 32768.
   'kimi-k2.7-code': { contextWindow: 256_000, outputWindow: 32 * K },
 };
@@ -66,11 +68,12 @@ describe('Ark Agent Plan model metadata', () => {
   it.each(Object.entries(VISION_ON))(
     'reports image input and plan windows for %s',
     (modelId, windows) => {
-      expect(getModelInfo('doubao', modelId)).toMatchObject({
+      const info = getModelInfo('doubao', modelId);
+      expect(info).toMatchObject({
         contextWindow: windows.contextWindow,
-        outputWindow: windows.outputWindow,
         capabilities: { vision: true, tools: true },
       });
+      expect(info?.outputWindow).toBe(windows.outputWindow);
     },
   );
 
@@ -148,5 +151,46 @@ describe('Ark Agent Plan model metadata', () => {
     expect(ids).not.toContain('deepseek-v4-pro');
     expect(ids).not.toContain('kimi-k2.7-code');
     expect(ids).toContain('doubao-seed-2-1-pro-260628');
+  });
+
+  it('keeps plan-only ids off the direct Kimi and Doubao presets', () => {
+    const directKimi = presetModels(getProviderPreset('kimi')!, 'chat').map((model) => model.id);
+    const directDoubao = presetModels(getProviderPreset('doubao')!, 'chat').map(
+      (model) => model.id,
+    );
+    const kimiRegistry = getProvider('kimi')!.models.map((model) => model.id);
+    const doubaoRegistry = getProvider('doubao')!.models.map((model) => model.id);
+
+    for (const id of ['k3-256k', 'kimi-for-coding', 'kimi-for-coding-highspeed']) {
+      expect(directKimi, id).not.toContain(id);
+      expect(kimiRegistry, id).not.toContain(id);
+      expect(getModelInfo('kimi', id)?.contextWindow, id).toBeGreaterThan(0);
+    }
+
+    for (const id of [
+      'doubao-seed-2.1-pro',
+      'doubao-seed-2.1-lite',
+      'doubao-seed-2.0-mini',
+      'ark-code-latest',
+      'deepseek-v4-flash',
+      'minimax-m3',
+      'kimi-k2.8-preview',
+    ]) {
+      expect(directDoubao, id).not.toContain(id);
+      expect(doubaoRegistry, id).not.toContain(id);
+    }
+
+    const ark = presetModels(getProviderPreset('volcengine-ark')!, 'chat').map((model) => model.id);
+    expect(ark).toEqual(
+      expect.arrayContaining(['doubao-seed-2.1-pro', 'kimi-k2.8-preview', 'ark-code-latest']),
+    );
+    const coding = presetModels(getProviderPreset('kimi-coding-plan')!, 'chat').map(
+      (model) => model.id,
+    );
+    expect(coding).toEqual(
+      expect.arrayContaining(['k3-256k', 'kimi-for-coding', 'kimi-for-coding-highspeed']),
+    );
+
+    expect(getModelInfo('doubao', 'gpt-5.6')).toBeUndefined();
   });
 });

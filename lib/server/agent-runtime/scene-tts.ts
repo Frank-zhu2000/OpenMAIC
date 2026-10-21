@@ -2,6 +2,8 @@ import { configuredDefaultVoice } from '@/lib/audio/provider-default-voice';
 import { authorizeMediaModel } from '@/lib/server/model-config/media';
 import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { generateTTS, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
+import { runFailureCode } from '@/lib/server/generation/run/failure-code';
+import { createSemaphore } from '@/lib/utils/concurrency';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { BROWSER_NATIVE_TTS_PROVIDER_ID } from '@/lib/audio/provider-enablement';
 import type { LegacySpeechAction, SpeechAction } from '@/lib/types/action';
@@ -11,12 +13,32 @@ import { serverMediaConnection } from '@/lib/server/model-config/media';
 import { resolveTTSModel, slotTTSModel } from '@/lib/server/provider-config';
 import { persistClassroomMediaBytes } from '@/lib/server/classroom-media-bytes';
 
+export interface SceneTtsFailure {
+  id: string;
+  /** Category from the shared generation failure classifier, never a provider body. */
+  reason: string;
+}
+
 export interface SceneTtsSummary {
   available: boolean;
   changed: boolean;
   generated: number;
   skipped: number;
-  failed: string[];
+  failed: SceneTtsFailure[];
+}
+
+/** One in-flight provider call, shared by parallel agent tool calls of that provider. */
+const AGENT_TTS_IN_FLIGHT_LIMIT = 1;
+
+const providerGates = new Map<string, ReturnType<typeof createSemaphore>>();
+
+function providerGate(providerId: string) {
+  let gate = providerGates.get(providerId);
+  if (!gate) {
+    gate = createSemaphore(AGENT_TTS_IN_FLIGHT_LIMIT);
+    providerGates.set(providerId, gate);
+  }
+  return gate;
 }
 
 export interface SceneTtsInput {
@@ -71,7 +93,7 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
   authorizeMediaModel(connection, 'tts', modelId);
   let generated = 0;
   let skipped = 0;
-  const failed: string[] = [];
+  const failed: SceneTtsFailure[] = [];
   for (const action of input.scene.actions ?? []) {
     if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
     const speech = action as SpeechAction;
@@ -81,23 +103,26 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
     }
     if (input.signal?.aborted) throw new Error('aborted');
     try {
-      const audio = await generateTTS(
-        {
-          providerId,
-          modelId,
-          apiKey,
-          baseUrl: connection.baseUrl,
-          managed: connection.managed,
-          publicOnly: connection.userEndpoint,
-          voice,
-          ...(connection.voices ? { voices: connection.voices } : {}),
-          speed: speech.speed,
-          // The provider's own options (a VoxCPM backend, say).
-          providerOptions: adapterOptions(connection),
-          signal: input.signal,
-        },
-        speech.text,
-      );
+      const audio = await providerGate(providerId).run(async () => {
+        if (input.signal?.aborted) throw new Error('aborted');
+        return generateTTS(
+          {
+            providerId,
+            modelId,
+            apiKey,
+            baseUrl: connection.baseUrl,
+            managed: connection.managed,
+            publicOnly: connection.userEndpoint,
+            voice,
+            ...(connection.voices ? { voices: connection.voices } : {}),
+            speed: speech.speed,
+            // The provider's own options (a VoxCPM backend, say).
+            providerOptions: adapterOptions(connection),
+            signal: input.signal,
+          },
+          speech.text,
+        );
+      });
       if (input.signal?.aborted) throw new Error('aborted');
       // The persisted reference is the RELATIVE classroom-media path (the
       // agent runtime has no request origin; relative stays valid on any
@@ -123,7 +148,7 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
       // error instead of degrading into a per-action failure: the remaining
       // actions would hit the same hung upstream and the session would wedge.
       if (error instanceof TTSRequestTimeoutError) throw error;
-      failed.push(action.id);
+      failed.push({ id: action.id, reason: runFailureCode(error).errorCode });
     }
   }
   return {

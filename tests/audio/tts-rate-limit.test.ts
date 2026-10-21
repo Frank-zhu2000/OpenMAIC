@@ -75,7 +75,10 @@ describe('TTS provider failure classification', () => {
     const failure = await generateTTS(miniMaxConfig, 'hello').catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(TTSRateLimitError);
     expect((failure as Error).cause).toBeInstanceOf(ProviderQuotaExhaustedError);
-    expect(runFailureCode(failure)).toEqual({ errorCode: 'PROVIDER_QUOTA_EXHAUSTED' });
+    expect(runFailureCode(failure)).toEqual({
+      errorCode: 'PROVIDER_QUOTA_EXHAUSTED',
+      statusCode: 429,
+    });
   });
 
   it('translates a quota code in a MiniMax HTTP error body', async () => {
@@ -104,35 +107,36 @@ describe('TTS provider failure classification', () => {
     expect(failure).toBeInstanceOf(Error);
     expect(failure).not.toBeInstanceOf(ProviderQuotaExhaustedError);
     expect((failure as Error).cause).toBeUndefined();
-    expect(runFailureCode(failure)).toEqual({ errorCode: 'INTERNAL_ERROR' });
+    expect(runFailureCode(failure)).toEqual(
+      status_code === 1002
+        ? { errorCode: 'RATE_LIMITED', statusCode: 429 }
+        : { errorCode: 'INTERNAL_ERROR' },
+    );
   });
 
   it.each([
-    ['insufficient_quota', 'PROVIDER_QUOTA_EXHAUSTED'],
-    ['rate_limit_exceeded', 'INTERNAL_ERROR'],
-  ])(
-    'preserves OpenAI %s details without changing its retry delay or error type',
-    async (code, errorCode) => {
-      fetchMock.mockResolvedValue(
-        Response.json(
-          { error: { code, message: 'Request refused' } },
-          { status: 429, headers: { 'retry-after': '7' } },
-        ),
-      );
-      const failure = await generateTTS(
-        {
-          providerId: 'openai-tts',
-          apiKey: 'test-key',
-          voice: 'alloy',
-          modelId: 'tts-1',
-        },
-        'hello',
-      ).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(TTSRateLimitError);
-      expect(failure).toMatchObject({ retryAfterMs: 7000 });
-      expect(runFailureCode(failure)).toEqual({ errorCode });
-    },
-  );
+    ['insufficient_quota', { errorCode: 'PROVIDER_QUOTA_EXHAUSTED', statusCode: 429 }],
+    ['rate_limit_exceeded', { errorCode: 'RATE_LIMITED', statusCode: 429 }],
+  ])('preserves OpenAI %s retry delay and error type', async (code, failureCode) => {
+    fetchMock.mockResolvedValue(
+      Response.json(
+        { error: { code, message: 'Request refused' } },
+        { status: 429, headers: { 'retry-after': '7' } },
+      ),
+    );
+    const failure = await generateTTS(
+      {
+        providerId: 'openai-tts',
+        apiKey: 'test-key',
+        voice: 'alloy',
+        modelId: 'tts-1',
+      },
+      'hello',
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(TTSRateLimitError);
+    expect(failure).toMatchObject({ retryAfterMs: 7000 });
+    expect(runFailureCode(failure)).toEqual(failureCode);
+  });
 
   it.each([
     [429, 'insufficient_quota', 1],

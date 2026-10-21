@@ -154,6 +154,11 @@ export interface TTSGenerationResult {
 export class TTSRateLimitError extends Error {
   /** Milliseconds from a `Retry-After` header, when the provider sent one. */
   readonly retryAfterMs?: number;
+  /**
+   * Status the shared failure classifier already maps to `RATE_LIMITED`.
+   * A quota error attached as `cause` still wins over this status.
+   */
+  readonly statusCode = 429;
 
   constructor(
     public readonly provider: string,

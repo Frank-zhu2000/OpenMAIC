@@ -1,3 +1,8 @@
+import { DEFAULT_MAX_DELAY_MS } from '@openmaic/generation';
+import {
+  agentToolBudgetRemainingMs,
+  DEFAULT_AGENT_TOOL_TIMEOUT_MS,
+} from '@/lib/agent/runtime/tool-timeout';
 import { configuredDefaultVoice } from '@/lib/audio/provider-default-voice';
 import { authorizeMediaModel } from '@/lib/server/model-config/media';
 import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
@@ -51,6 +56,17 @@ export interface SceneTtsInput {
   ownerId?: string;
   /** Retry sleep. Production waits; tests pass a fake clock. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /**
+   * Budget when `signal` is not the tool-timeout signal. Defaults to the
+   * `generate_tts` budget. A tool-timeout deadline on `signal` wins.
+   */
+  budgetMs?: number;
+}
+
+function remainingBudgetMs(input: SceneTtsInput, startedAt: number): number {
+  const fromTool = agentToolBudgetRemainingMs(input.signal);
+  if (fromTool !== undefined) return fromTool;
+  return (input.budgetMs ?? DEFAULT_AGENT_TOOL_TIMEOUT_MS) - (Date.now() - startedAt);
 }
 
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -81,6 +97,7 @@ function audioMime(format: string) {
 
 /** Server-configured narration synthesis into the stage's classroom-media path. */
 export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<SceneTtsSummary> {
+  const startedAt = Date.now();
   // The tts slot decides the provider; the narrator's bound voice applies
   // only when it belongs to that provider.
   const connection = await serverMediaConnection('tts', input.ownerId);
@@ -124,10 +141,12 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
     }
     if (input.signal?.aborted) throw new Error('aborted');
     // Same retry as a classroom narration clip: a retryable failure, including
-    // 429, sleeps before the next attempt. The semaphore stays held so one
-    // provider is not called again during that sleep. A timeout still aborts
-    // the tool instead of being retried.
+    // 429, sleeps before the next attempt, and never longer than that clip's
+    // backoff cap. The semaphore stays held during the sleep. A wait the
+    // remaining tool budget cannot cover fails this line instead of sleeping.
+    // A timeout still aborts the tool instead of being retried.
     let retryAfterMs = 0;
+    let lastError: unknown;
     try {
       const audio = await providerGate(providerId).run(() =>
         withRouteRetry(
@@ -152,6 +171,7 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
                 speech.text,
               );
             } catch (error) {
+              lastError = error;
               if (error instanceof TTSRateLimitError && error.retryAfterMs !== undefined) {
                 retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs);
               }
@@ -164,8 +184,20 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
             refusalStatus: 400,
             signal: input.signal,
             sleep: (ms, signal) => {
-              const wait = Math.max(ms, retryAfterMs);
+              if (signal?.aborted || input.signal?.aborted) {
+                throw new DOMException('Aborted', 'AbortError');
+              }
+              const pace = retryAfterMs;
               retryAfterMs = 0;
+              const wait = Math.min(DEFAULT_MAX_DELAY_MS, Math.max(ms, pace));
+              if (wait > 0 && wait >= remainingBudgetMs(input, startedAt)) {
+                throw (
+                  lastError ??
+                  Object.assign(new Error('TTS retry wait exceeds the remaining tool budget'), {
+                    statusCode: 429,
+                  })
+                );
+              }
               return (input.sleep ?? abortableSleep)(wait, signal);
             },
             rethrow: (error) =>

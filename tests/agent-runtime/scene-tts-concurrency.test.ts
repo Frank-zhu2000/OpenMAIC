@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_MAX_DELAY_MS } from '@openmaic/generation';
 
+import { DEFAULT_AGENT_TOOL_TIMEOUT_MS } from '@/lib/agent/runtime/tool-timeout';
 import { TTSRateLimitError, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
 import type { SceneTtsFailure } from '@/lib/server/agent-runtime/scene-tts';
 import { runFailureCode, type RunFailureErrorCode } from '@/lib/server/generation/run/failure-code';
@@ -120,10 +122,10 @@ describe('agent TTS in-flight cap', () => {
     ).toBe(true);
   });
 
-  it('caps each provider on its own semaphore', async () => {
+  it('caps each provider id even when two owners share it', async () => {
     mocks.providers.mockImplementation(async (_kind: unknown, ownerId: unknown) => ({
       ...connection,
-      providerId: ownerId === 'user:a' ? 'provider-a' : 'provider-b',
+      providerId: ownerId === 'user:b' ? 'provider-b' : 'provider-a',
     }));
     let inFlightA = 0;
     let inFlightB = 0;
@@ -156,7 +158,7 @@ describe('agent TTS in-flight cap', () => {
 
     const pending = Promise.all([
       synthesizeSceneNarration({ scene: scene('a1'), force: false, ownerId: 'user:a' }),
-      synthesizeSceneNarration({ scene: scene('a2'), force: false, ownerId: 'user:a' }),
+      synthesizeSceneNarration({ scene: scene('c1'), force: false, ownerId: 'user:c' }),
       synthesizeSceneNarration({ scene: scene('b1'), force: false, ownerId: 'user:b' }),
     ]);
     try {
@@ -175,6 +177,77 @@ describe('agent TTS in-flight cap', () => {
     expect(peakB).toBe(1);
     expect(peakTotal).toBe(2);
     expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
+  });
+
+  it('samples the in-flight count during a Retry-After sleep and stays within the cap', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const samplesDuringSleep: number[] = [];
+    const limited = new Set<string>();
+    let releaseSleep = () => {};
+    const sleepGate = new Promise<void>((resolve) => {
+      releaseSleep = resolve;
+    });
+    let enteredSleep: () => void = () => {};
+    const sleepStarted = new Promise<void>((resolve) => {
+      enteredSleep = resolve;
+    });
+    mocks.generate.mockImplementation(async (_config: unknown, text: unknown) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        const key = String(text);
+        if (!limited.has(key)) {
+          limited.add(key);
+          throw new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 5_000);
+        }
+        return { audio: new Uint8Array([1]), format: 'mp3' };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+
+    const sleep = async (ms: number) => {
+      expect(ms).toBeGreaterThanOrEqual(5_000);
+      expect(ms).toBeLessThanOrEqual(DEFAULT_MAX_DELAY_MS);
+      samplesDuringSleep.push(inFlight);
+      enteredSleep();
+      await sleepGate;
+      samplesDuringSleep.push(inFlight);
+    };
+    const pending = Promise.all([
+      synthesizeSceneNarration({
+        scene: scene('a'),
+        force: false,
+        ownerId: 'user:alice',
+        sleep,
+      }),
+      synthesizeSceneNarration({
+        scene: scene('b'),
+        force: false,
+        ownerId: 'user:alice',
+        sleep,
+      }),
+    ]);
+
+    try {
+      await sleepStarted;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      samplesDuringSleep.push(inFlight);
+      expect(inFlight).toBeLessThanOrEqual(IN_FLIGHT_CAP);
+      expect(peak).toBeLessThanOrEqual(IN_FLIGHT_CAP);
+      expect(mocks.generate).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseSleep();
+    }
+
+    const summaries = await pending;
+    expect(samplesDuringSleep.length).toBeGreaterThan(0);
+    expect(samplesDuringSleep.every((count) => count <= IN_FLIGHT_CAP)).toBe(true);
+    expect(peak).toBe(IN_FLIGHT_CAP);
+    expect(
+      summaries.every((summary) => summary.generated === 1 && summary.failed.length === 0),
+    ).toBe(true);
   });
 });
 
@@ -286,6 +359,65 @@ describe('agent TTS classroom retry throttle', () => {
     expect(summary.generated).toBe(2);
     expect(summary.failed).toEqual([]);
     expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('clamps a Retry-After larger than the classroom backoff cap', async () => {
+    const huge = DEFAULT_AGENT_TOOL_TIMEOUT_MS * 2;
+    const sleeps: number[] = [];
+    mocks.generate.mockRejectedValue(new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, huge));
+
+    const summary = await synthesizeSceneNarration({
+      scene: scene('a'),
+      force: false,
+      ownerId: 'user:alice',
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(huge).toBeGreaterThan(DEFAULT_MAX_DELAY_MS);
+    expect(sleeps).toHaveLength(SCENE_MAX_RETRIES);
+    expect(sleeps.every((ms) => ms === DEFAULT_MAX_DELAY_MS)).toBe(true);
+    expect(summary.failed).toEqual([{ id: 'speech-a', reason: 'RATE_LIMITED' }]);
+    expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('fails the line instead of sleeping when the remaining budget cannot fit the wait', async () => {
+    const sleeps: number[] = [];
+    mocks.generate.mockRejectedValue(new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 5_000));
+
+    const summary = await synthesizeSceneNarration({
+      scene: scene('a'),
+      force: false,
+      ownerId: 'user:alice',
+      budgetMs: 1_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(sleeps).toEqual([]);
+    expect(mocks.generate).toHaveBeenCalledTimes(1);
+    expect(summary.failed).toEqual([{ id: 'speech-a', reason: 'RATE_LIMITED' }]);
+    expect(summary.generated).toBe(0);
+    expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('still aborts on TTSRequestTimeoutError when the remaining budget is too small to wait', async () => {
+    mocks.generate.mockRejectedValue(new TTSRequestTimeoutError('MiniMax', 'request timed out'));
+
+    await expect(
+      synthesizeSceneNarration({
+        scene: scene('a'),
+        force: false,
+        ownerId: 'user:alice',
+        budgetMs: 1,
+        sleep: async () => {
+          throw new Error('slept');
+        },
+      }),
+    ).rejects.toBeInstanceOf(TTSRequestTimeoutError);
+    expect(mocks.generate).toHaveBeenCalledTimes(1);
   });
 
   it('uses the classroom narration retry budget before recording a rate limit', async () => {

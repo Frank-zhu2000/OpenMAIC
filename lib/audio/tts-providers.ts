@@ -155,8 +155,10 @@ export class TTSRateLimitError extends Error {
   /** Milliseconds from a `Retry-After` header, when the provider sent one. */
   readonly retryAfterMs?: number;
   /**
-   * Status the shared failure classifier already maps to `RATE_LIMITED`.
-   * A quota error attached as `cause` still wins over this status.
+   * Classifier sentinel, not the provider's HTTP status. Business-level rate
+   * limits (MiniMax HTTP 200 + code 1002, Doubao business codes) still carry
+   * 429 so `runFailureCode` and route retry map this class to `RATE_LIMITED`
+   * and a retryable status. A quota error attached as `cause` still wins.
    */
   readonly statusCode = 429;
 

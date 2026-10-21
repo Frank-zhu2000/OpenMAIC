@@ -1,8 +1,9 @@
 import { configuredDefaultVoice } from '@/lib/audio/provider-default-voice';
 import { authorizeMediaModel } from '@/lib/server/model-config/media';
 import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
-import { generateTTS, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
-import { runFailureCode } from '@/lib/server/generation/run/failure-code';
+import { generateTTS, TTSRateLimitError, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
+import { runFailureCode, type RunFailureErrorCode } from '@/lib/server/generation/run/failure-code';
+import { SCENE_MAX_RETRIES, withRouteRetry } from '@/lib/server/generation/run/retry';
 import { createSemaphore } from '@/lib/utils/concurrency';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { BROWSER_NATIVE_TTS_PROVIDER_ID } from '@/lib/audio/provider-enablement';
@@ -15,8 +16,8 @@ import { persistClassroomMediaBytes } from '@/lib/server/classroom-media-bytes';
 
 export interface SceneTtsFailure {
   id: string;
-  /** Category from the shared generation failure classifier, never a provider body. */
-  reason: string;
+  /** `runFailureCode().errorCode`. Never a provider body or `error.message`. */
+  reason: RunFailureErrorCode;
 }
 
 export interface SceneTtsSummary {
@@ -48,6 +49,26 @@ export interface SceneTtsInput {
   signal?: AbortSignal;
   /** The run's owner, whose tts slot applies. */
   ownerId?: string;
+  /** Retry sleep. Production waits; tests pass a fake clock. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function narratorVoice(roster: SceneTtsInput['roster']) {
@@ -102,27 +123,56 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
       continue;
     }
     if (input.signal?.aborted) throw new Error('aborted');
+    // Same retry as a classroom narration clip: a retryable failure, including
+    // 429, sleeps before the next attempt. The semaphore stays held so one
+    // provider is not called again during that sleep. A timeout still aborts
+    // the tool instead of being retried.
+    let retryAfterMs = 0;
     try {
-      const audio = await providerGate(providerId).run(async () => {
-        if (input.signal?.aborted) throw new Error('aborted');
-        return generateTTS(
-          {
-            providerId,
-            modelId,
-            apiKey,
-            baseUrl: connection.baseUrl,
-            managed: connection.managed,
-            publicOnly: connection.userEndpoint,
-            voice,
-            ...(connection.voices ? { voices: connection.voices } : {}),
-            speed: speech.speed,
-            // The provider's own options (a VoxCPM backend, say).
-            providerOptions: adapterOptions(connection),
-            signal: input.signal,
+      const audio = await providerGate(providerId).run(() =>
+        withRouteRetry(
+          async () => {
+            if (input.signal?.aborted) throw new Error('aborted');
+            try {
+              return await generateTTS(
+                {
+                  providerId,
+                  modelId,
+                  apiKey,
+                  baseUrl: connection.baseUrl,
+                  managed: connection.managed,
+                  publicOnly: connection.userEndpoint,
+                  voice,
+                  ...(connection.voices ? { voices: connection.voices } : {}),
+                  speed: speech.speed,
+                  // The provider's own options (a VoxCPM backend, say).
+                  providerOptions: adapterOptions(connection),
+                  signal: input.signal,
+                },
+                speech.text,
+              );
+            } catch (error) {
+              if (error instanceof TTSRateLimitError && error.retryAfterMs !== undefined) {
+                retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs);
+              }
+              throw error;
+            }
           },
-          speech.text,
-        );
-      });
+          {
+            label: `agent-tts ${action.id}`,
+            maxRetries: SCENE_MAX_RETRIES,
+            refusalStatus: 400,
+            signal: input.signal,
+            sleep: (ms, signal) => {
+              const wait = Math.max(ms, retryAfterMs);
+              retryAfterMs = 0;
+              return (input.sleep ?? abortableSleep)(wait, signal);
+            },
+            rethrow: (error) =>
+              error instanceof TTSRequestTimeoutError || input.signal?.aborted === true,
+          },
+        ),
+      );
       if (input.signal?.aborted) throw new Error('aborted');
       // The persisted reference is the RELATIVE classroom-media path (the
       // agent runtime has no request origin; relative stays valid on any

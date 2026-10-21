@@ -604,7 +604,11 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           });
         }
       }
-      return result(`Persisted ${actions.length} known actions for "${scene.title}".`, {
+      const narration =
+        audio?.available === true
+          ? ` Narration audio: ${audio.generated} generated, ${audio.skipped} skipped, ${audio.failed.length} failed.`
+          : '';
+      return result(`Persisted ${actions.length} known actions for "${scene.title}".${narration}`, {
         sceneId: scene.id,
         actions,
         ...(audio ? { audio } : {}),

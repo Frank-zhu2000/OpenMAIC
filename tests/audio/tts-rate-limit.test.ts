@@ -96,23 +96,26 @@ describe('TTS provider failure classification', () => {
     [429, 1002],
     [400, 1004],
     [500, undefined],
-  ])('leaves every other MiniMax answer (%s/%s) as it was', async (status, status_code) => {
-    fetchMock.mockResolvedValue(
-      jsonResponse(
-        status_code === undefined ? { error: 'boom' } : { base_resp: { status_code } },
-        status,
-      ),
-    );
-    const failure = await generateTTS(miniMaxConfig, 'hello').catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(failure).not.toBeInstanceOf(ProviderQuotaExhaustedError);
-    expect((failure as Error).cause).toBeUndefined();
-    expect(runFailureCode(failure)).toEqual(
-      status_code === 1002
-        ? { errorCode: 'RATE_LIMITED', statusCode: 429 }
-        : { errorCode: 'INTERNAL_ERROR' },
-    );
-  });
+  ])(
+    'classifies a MiniMax answer (%s/%s); business code 1002 uses the 429 sentinel',
+    async (status, status_code) => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(
+          status_code === undefined ? { error: 'boom' } : { base_resp: { status_code } },
+          status,
+        ),
+      );
+      const failure = await generateTTS(miniMaxConfig, 'hello').catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(ProviderQuotaExhaustedError);
+      expect((failure as Error).cause).toBeUndefined();
+      expect(runFailureCode(failure)).toEqual(
+        status_code === 1002
+          ? { errorCode: 'RATE_LIMITED', statusCode: 429 }
+          : { errorCode: 'INTERNAL_ERROR' },
+      );
+    },
+  );
 
   it.each([
     ['insufficient_quota', { errorCode: 'PROVIDER_QUOTA_EXHAUSTED', statusCode: 429 }],

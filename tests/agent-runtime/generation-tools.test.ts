@@ -597,4 +597,61 @@ describe('generation and deck tools', () => {
     }
     expect(foreign.get()).toBeNull();
   });
+
+  it('keeps generate_tts content to the count sentence', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const raw = 'RAW_PROVIDER_BODY secret-upstream';
+    const response = await find(
+      buildDslCourseToolset(
+        deps(current.store, {
+          synthesizeTts: vi.fn(async () => ({
+            available: true,
+            changed: false,
+            generated: 0,
+            skipped: 1,
+            failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+          })),
+        }),
+      ),
+      'generate_tts',
+    ).execute('call', { stageId: 'stage-test', order: 1 } as never);
+
+    const text = (response.content[0] as { text: string }).text;
+    expect(text).toBe('Narration audio: 0 generated, 1 skipped, 1 failed.');
+    expect(text).not.toContain(raw);
+    expect(text).not.toContain('speech-a');
+    expect(response.details).toMatchObject({
+      failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+    });
+    expect(JSON.stringify(response.content)).not.toContain(raw);
+  });
+
+  it('mentions narration failures in generate_actions content', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const raw = 'RAW_PROVIDER_BODY secret-upstream';
+    const response = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => ({
+            available: true,
+            changed: false,
+            generated: 0,
+            skipped: 0,
+            failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+          })),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call', { stageId: 'stage-test', order: 1 } as never);
+
+    const text = (response.content[0] as { text: string }).text;
+    expect(text).toContain('Persisted 1 known actions for "Intro".');
+    expect(text).toContain('Narration audio: 0 generated, 0 skipped, 1 failed.');
+    expect(text).not.toContain(raw);
+    expect(text).not.toContain('speech-a');
+    expect(response.details).toMatchObject({
+      audio: { failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }] },
+    });
+  });
 });

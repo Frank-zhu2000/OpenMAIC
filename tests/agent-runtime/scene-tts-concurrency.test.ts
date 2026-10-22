@@ -122,10 +122,13 @@ describe('agent TTS in-flight cap', () => {
     ).toBe(true);
   });
 
-  it('caps each provider id even when two owners share it', async () => {
+  it('does not block two owners that use different keys', async () => {
     mocks.providers.mockImplementation(async (_kind: unknown, ownerId: unknown) => ({
       ...connection,
-      providerId: ownerId === 'user:b' ? 'provider-b' : 'provider-a',
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: ownerId === 'user:b' ? 'key-b' : 'key-a',
+      managed: false,
     }));
     let inFlightA = 0;
     let inFlightB = 0;
@@ -140,25 +143,25 @@ describe('agent TTS in-flight cap', () => {
     const gateB = new Promise<void>((resolve) => {
       releaseB = resolve;
     });
-    mocks.generate.mockImplementation(async (config: { providerId?: string }) => {
-      const providerA = config.providerId === 'provider-a';
-      if (providerA) inFlightA += 1;
+    mocks.generate.mockImplementation(async (config: { apiKey?: string }) => {
+      const ownerA = config.apiKey === 'key-a';
+      if (ownerA) inFlightA += 1;
       else inFlightB += 1;
       peakA = Math.max(peakA, inFlightA);
       peakB = Math.max(peakB, inFlightB);
       peakTotal = Math.max(peakTotal, inFlightA + inFlightB);
       try {
-        await (providerA ? gateA : gateB);
+        await (ownerA ? gateA : gateB);
         return { audio: new Uint8Array([1]), format: 'mp3' };
       } finally {
-        if (providerA) inFlightA -= 1;
+        if (ownerA) inFlightA -= 1;
         else inFlightB -= 1;
       }
     });
 
     const pending = Promise.all([
       synthesizeSceneNarration({ scene: scene('a1'), force: false, ownerId: 'user:a' }),
-      synthesizeSceneNarration({ scene: scene('c1'), force: false, ownerId: 'user:c' }),
+      synthesizeSceneNarration({ scene: scene('a2'), force: false, ownerId: 'user:a' }),
       synthesizeSceneNarration({ scene: scene('b1'), force: false, ownerId: 'user:b' }),
     ]);
     try {
@@ -179,7 +182,90 @@ describe('agent TTS in-flight cap', () => {
     expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
   });
 
-  it('samples the in-flight count during a Retry-After sleep and stays within the cap', async () => {
+  it('does not block two owners that use different base URLs', async () => {
+    mocks.providers.mockImplementation(async (_kind: unknown, ownerId: unknown) => ({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: ownerId === 'user:b' ? 'https://b.example/v1' : 'https://a.example/v1',
+      apiKey: 'shared-key',
+      managed: false,
+    }));
+    let inFlight = 0;
+    let peak = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.generate.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        await gate;
+        return { audio: new Uint8Array([1]), format: 'mp3' };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const pending = Promise.all([
+      synthesizeSceneNarration({ scene: scene('u1'), force: false, ownerId: 'user:a' }),
+      synthesizeSceneNarration({ scene: scene('u2'), force: false, ownerId: 'user:b' }),
+    ]);
+    try {
+      await vi.waitFor(() => expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(peak).toBe(2);
+      expect(mocks.generate.mock.calls.length).toBe(2);
+    } finally {
+      release();
+    }
+    const summaries = await pending;
+    expect(peak).toBe(2);
+    expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
+  });
+
+  it('shares one cap for one managed connection id', async () => {
+    mocks.providers.mockImplementation(async (_kind: unknown, ownerId: unknown) => ({
+      ...connection,
+      providerId: ownerId === 'user:b' ? 'provider-b' : 'provider-a',
+      baseUrl: ownerId === 'user:b' ? 'https://b.example/v1' : 'https://a.example/v1',
+      apiKey: ownerId === 'user:b' ? 'key-b' : 'key-a',
+      deploymentProviderId: 'managed-tts',
+      managed: true,
+    }));
+    let inFlight = 0;
+    let peak = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.generate.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        await gate;
+        return { audio: new Uint8Array([1]), format: 'mp3' };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const pending = Promise.all([
+      synthesizeSceneNarration({ scene: scene('m1'), force: false, ownerId: 'user:a' }),
+      synthesizeSceneNarration({ scene: scene('m2'), force: false, ownerId: 'user:b' }),
+    ]);
+    try {
+      await vi.waitFor(() => expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(1));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(peak).toBe(1);
+      expect(mocks.generate.mock.calls.length).toBe(1);
+    } finally {
+      release();
+    }
+    const summaries = await pending;
+    expect(peak).toBe(1);
+    expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
+  });
+
+  it('releases the in-flight slot during a Retry-After sleep', async () => {
     let inFlight = 0;
     let peak = 0;
     const samplesDuringSleep: number[] = [];
@@ -236,7 +322,7 @@ describe('agent TTS in-flight cap', () => {
       samplesDuringSleep.push(inFlight);
       expect(inFlight).toBeLessThanOrEqual(IN_FLIGHT_CAP);
       expect(peak).toBeLessThanOrEqual(IN_FLIGHT_CAP);
-      expect(mocks.generate).toHaveBeenCalledTimes(1);
+      expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(2);
     } finally {
       releaseSleep();
     }
@@ -248,6 +334,57 @@ describe('agent TTS in-flight cap', () => {
     expect(
       summaries.every((summary) => summary.generated === 1 && summary.failed.length === 0),
     ).toBe(true);
+  });
+
+  it('honors OPENMAIC_AGENT_TTS_CONCURRENCY for one connection', async () => {
+    const previous = process.env.OPENMAIC_AGENT_TTS_CONCURRENCY;
+    process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = '2';
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-configured-cap',
+      managed: false,
+    });
+    let inFlight = 0;
+    let peak = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.generate.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        await gate;
+        return { audio: new Uint8Array([1]), format: 'mp3' };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const pending = Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        synthesizeSceneNarration({
+          scene: scene(`cap-${index}`),
+          force: false,
+          ownerId: 'user:cap',
+        }),
+      ),
+    );
+    try {
+      await vi.waitFor(() => expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(peak).toBe(2);
+      expect(inFlight).toBeLessThanOrEqual(2);
+      expect(mocks.generate.mock.calls.length).toBe(2);
+    } finally {
+      release();
+      if (previous === undefined) delete process.env.OPENMAIC_AGENT_TTS_CONCURRENCY;
+      else process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = previous;
+    }
+    const summaries = await pending;
+    expect(peak).toBe(2);
+    expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
   });
 });
 

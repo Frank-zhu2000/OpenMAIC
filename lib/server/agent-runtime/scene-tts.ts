@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { DEFAULT_MAX_DELAY_MS } from '@openmaic/generation';
 import {
   agentToolBudgetRemainingMs,
@@ -33,18 +35,60 @@ export interface SceneTtsSummary {
   failed: SceneTtsFailure[];
 }
 
-/** One in-flight provider call, shared by parallel agent tool calls of that provider. */
-const AGENT_TTS_IN_FLIGHT_LIMIT = 1;
+/** Small default. `OPENMAIC_AGENT_TTS_CONCURRENCY` overrides it. The cap is per process. */
+const AGENT_TTS_IN_FLIGHT_DEFAULT = 1;
+const AGENT_TTS_CONCURRENCY_ENV = 'OPENMAIC_AGENT_TTS_CONCURRENCY';
 
 const providerGates = new Map<string, ReturnType<typeof createSemaphore>>();
 
-function providerGate(providerId: string) {
-  let gate = providerGates.get(providerId);
+function agentTtsInFlightLimit(): number {
+  const raw = process.env[AGENT_TTS_CONCURRENCY_ENV]?.trim();
+  if (!raw) return AGENT_TTS_IN_FLIGHT_DEFAULT;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 ? value : AGENT_TTS_IN_FLIGHT_DEFAULT;
+}
+
+function connectionGateKey(connection: {
+  providerId: string;
+  baseUrl?: string;
+  apiKey?: string;
+  managed: boolean;
+  deploymentProviderId?: string;
+}): string {
+  if (connection.managed && connection.deploymentProviderId) {
+    return `managed:${connection.deploymentProviderId}`;
+  }
+  const keyHash = createHash('sha256')
+    .update(connection.apiKey ?? '', 'utf8')
+    .digest('hex');
+  return `account:${connection.providerId}\0${connection.baseUrl ?? ''}\0${keyHash}`;
+}
+
+function providerGate(connection: {
+  providerId: string;
+  baseUrl?: string;
+  apiKey?: string;
+  managed: boolean;
+  deploymentProviderId?: string;
+}) {
+  const key = connectionGateKey(connection);
+  let gate = providerGates.get(key);
   if (!gate) {
-    gate = createSemaphore(AGENT_TTS_IN_FLIGHT_LIMIT);
-    providerGates.set(providerId, gate);
+    gate = createSemaphore(agentTtsInFlightLimit());
+    providerGates.set(key, gate);
   }
   return gate;
+}
+
+/** Model-visible tally. Error codes only, never action ids or provider bodies. */
+export function formatTtsFailureTally(failed: readonly { reason: string }[]): string {
+  if (failed.length === 0) return '0 failed';
+  const counts = new Map<string, number>();
+  for (const failure of failed) {
+    counts.set(failure.reason, (counts.get(failure.reason) ?? 0) + 1);
+  }
+  const breakdown = [...counts].map(([code, count]) => `${code}\u00d7${count}`).join(', ');
+  return `${failed.length} failed (${breakdown})`;
 }
 
 export interface SceneTtsInput {
@@ -142,18 +186,19 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
     if (input.signal?.aborted) throw new Error('aborted');
     // Same retry as a classroom narration clip: a retryable failure, including
     // 429, sleeps before the next attempt, and never longer than that clip's
-    // backoff cap. The semaphore stays held during the sleep. A wait the
-    // remaining tool budget cannot cover fails this line instead of sleeping.
-    // A timeout still aborts the tool instead of being retried.
+    // backoff cap. The in-flight slot covers the provider call only; the retry
+    // sleep does not hold it. A wait the remaining tool budget cannot cover
+    // fails this line instead of sleeping. A timeout still aborts the tool
+    // instead of being retried.
     let retryAfterMs = 0;
     let lastError: unknown;
     try {
-      const audio = await providerGate(providerId).run(() =>
-        withRouteRetry(
-          async () => {
-            if (input.signal?.aborted) throw new Error('aborted');
-            try {
-              return await generateTTS(
+      const audio = await withRouteRetry(
+        async () => {
+          if (input.signal?.aborted) throw new Error('aborted');
+          try {
+            return await providerGate(connection).run(() =>
+              generateTTS(
                 {
                   providerId,
                   modelId,
@@ -169,41 +214,41 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
                   signal: input.signal,
                 },
                 speech.text,
-              );
-            } catch (error) {
-              lastError = error;
-              if (error instanceof TTSRateLimitError && error.retryAfterMs !== undefined) {
-                retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs);
-              }
-              throw error;
+              ),
+            );
+          } catch (error) {
+            lastError = error;
+            if (error instanceof TTSRateLimitError && error.retryAfterMs !== undefined) {
+              retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs);
             }
+            throw error;
+          }
+        },
+        {
+          label: `agent-tts ${action.id}`,
+          maxRetries: SCENE_MAX_RETRIES,
+          refusalStatus: 400,
+          signal: input.signal,
+          sleep: (ms, signal) => {
+            if (signal?.aborted || input.signal?.aborted) {
+              throw new DOMException('Aborted', 'AbortError');
+            }
+            const pace = retryAfterMs;
+            retryAfterMs = 0;
+            const wait = Math.min(DEFAULT_MAX_DELAY_MS, Math.max(ms, pace));
+            if (wait > 0 && wait >= remainingBudgetMs(input, startedAt)) {
+              throw (
+                lastError ??
+                Object.assign(new Error('TTS retry wait exceeds the remaining tool budget'), {
+                  statusCode: 429,
+                })
+              );
+            }
+            return (input.sleep ?? abortableSleep)(wait, signal);
           },
-          {
-            label: `agent-tts ${action.id}`,
-            maxRetries: SCENE_MAX_RETRIES,
-            refusalStatus: 400,
-            signal: input.signal,
-            sleep: (ms, signal) => {
-              if (signal?.aborted || input.signal?.aborted) {
-                throw new DOMException('Aborted', 'AbortError');
-              }
-              const pace = retryAfterMs;
-              retryAfterMs = 0;
-              const wait = Math.min(DEFAULT_MAX_DELAY_MS, Math.max(ms, pace));
-              if (wait > 0 && wait >= remainingBudgetMs(input, startedAt)) {
-                throw (
-                  lastError ??
-                  Object.assign(new Error('TTS retry wait exceeds the remaining tool budget'), {
-                    statusCode: 429,
-                  })
-                );
-              }
-              return (input.sleep ?? abortableSleep)(wait, signal);
-            },
-            rethrow: (error) =>
-              error instanceof TTSRequestTimeoutError || input.signal?.aborted === true,
-          },
-        ),
+          rethrow: (error) =>
+            error instanceof TTSRequestTimeoutError || input.signal?.aborted === true,
+        },
       );
       if (input.signal?.aborted) throw new Error('aborted');
       // The persisted reference is the RELATIVE classroom-media path (the

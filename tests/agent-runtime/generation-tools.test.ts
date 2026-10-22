@@ -617,7 +617,7 @@ describe('generation and deck tools', () => {
     ).execute('call', { stageId: 'stage-test', order: 1 } as never);
 
     const text = (response.content[0] as { text: string }).text;
-    expect(text).toBe('Narration audio: 0 generated, 1 skipped, 1 failed.');
+    expect(text).toBe('Narration audio: 0 generated, 1 skipped, 1 failed (RATE_LIMITED\u00d71).');
     expect(text).not.toContain(raw);
     expect(text).not.toContain('speech-a');
     expect(response.details).toMatchObject({
@@ -647,11 +647,55 @@ describe('generation and deck tools', () => {
 
     const text = (response.content[0] as { text: string }).text;
     expect(text).toContain('Persisted 1 known actions for "Intro".');
-    expect(text).toContain('Narration audio: 0 generated, 0 skipped, 1 failed.');
+    expect(text).toContain(
+      'Narration audio: 0 generated, 0 skipped, 1 failed (RATE_LIMITED\u00d71).',
+    );
     expect(text).not.toContain(raw);
     expect(text).not.toContain('speech-a');
     expect(response.details).toMatchObject({
       audio: { failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }] },
     });
+  });
+
+  it('counts narration failures by error code without provider bodies', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const raw = 'RAW_PROVIDER_BODY secret-upstream';
+    const failed = [
+      { id: 'speech-a', reason: 'RATE_LIMITED' },
+      { id: 'speech-b', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+    ];
+    const summary = {
+      available: true,
+      changed: false,
+      generated: 0,
+      skipped: 0,
+      failed,
+    };
+    const tally = '2 failed (RATE_LIMITED\u00d71, PROVIDER_QUOTA_EXHAUSTED\u00d71)';
+    const tts = await find(
+      buildDslCourseToolset(deps(current.store, { synthesizeTts: vi.fn(async () => summary) })),
+      'generate_tts',
+    ).execute('call-tts', { stageId: 'stage-test', order: 1 } as never);
+    const actions = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => summary),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call-actions', { stageId: 'stage-test', order: 1 } as never);
+
+    const ttsText = (tts.content[0] as { text: string }).text;
+    const actionsText = (actions.content[0] as { text: string }).text;
+    expect(ttsText).toBe(`Narration audio: 0 generated, 0 skipped, ${tally}.`);
+    expect(actionsText).toContain('Persisted 1 known actions for "Intro".');
+    expect(actionsText).toContain(`Narration audio: 0 generated, 0 skipped, ${tally}.`);
+    for (const text of [ttsText, actionsText]) {
+      expect(text).not.toContain(raw);
+      expect(text).not.toContain('speech-a');
+      expect(text).not.toContain('speech-b');
+      expect(text).not.toContain('secret-upstream');
+    }
   });
 });

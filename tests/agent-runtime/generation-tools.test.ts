@@ -698,4 +698,47 @@ describe('generation and deck tools', () => {
       expect(text).not.toContain('secret-upstream');
     }
   });
+
+  it('does not emit a narration audio tally from generate_scene', async () => {
+    const current = state(document([]));
+    const synthesizeTts = vi.fn(async () => ({
+      available: true,
+      changed: true,
+      generated: 0,
+      skipped: 0,
+      failed: [
+        { id: 'speech-a', reason: 'RATE_LIMITED' },
+        { id: 'speech-b', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+      ],
+    }));
+    let calls = 0;
+    const response = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          synthesizeTts,
+          aiCall: vi.fn(async () => {
+            calls += 1;
+            return calls === 1
+              ? JSON.stringify([{ id: 'q1', type: 'short_answer', question: 'Try it?' }])
+              : JSON.stringify([{ type: 'text', content: 'Hello' }]);
+          }),
+        }),
+      ),
+      'generate_scene',
+    ).execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Practice',
+      type: 'quiz',
+      brief: 'Try the idea',
+    } as never);
+
+    const text = (response.content[0] as { text: string }).text;
+    expect(text).toContain('Page 1 "Practice" persisted.');
+    expect(text).not.toMatch(/Narration audio:/);
+    expect(text).not.toContain('RATE_LIMITED');
+    expect(text).not.toContain('PROVIDER_QUOTA_EXHAUSTED');
+    expect(text).not.toContain('speech-a');
+    expect(synthesizeTts).not.toHaveBeenCalled();
+  });
 });

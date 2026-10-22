@@ -39,7 +39,10 @@ vi.mock('@/lib/server/classroom-media-bytes', () => ({
   persistClassroomMediaBytes: (...args: unknown[]) => mocks.persist(...args),
 }));
 
-import { synthesizeSceneNarration } from '@/lib/server/agent-runtime/scene-tts';
+import {
+  resetAgentTtsProviderGatesForTests,
+  synthesizeSceneNarration,
+} from '@/lib/server/agent-runtime/scene-tts';
 
 /** Parallel agent calls must share one in-flight provider request, not one each. */
 const IN_FLIGHT_CAP = 1;
@@ -68,6 +71,7 @@ function scene(id: string): Scene {
 
 describe('agent TTS in-flight cap', () => {
   beforeEach(() => {
+    resetAgentTtsProviderGatesForTests();
     vi.clearAllMocks();
     mocks.providers.mockResolvedValue(connection);
     mocks.persist.mockResolvedValue('/api/classroom-media/stage-a/media/tts.mp3');
@@ -294,7 +298,8 @@ describe('agent TTS in-flight cap', () => {
     });
 
     const sleep = async (ms: number) => {
-      expect(ms).toBeGreaterThanOrEqual(5_000);
+      // A peer waits for the remaining deadline, which is a few ms under Retry-After.
+      expect(ms).toBeGreaterThanOrEqual(4_000);
       expect(ms).toBeLessThanOrEqual(DEFAULT_MAX_DELAY_MS);
       samplesDuringSleep.push(inFlight);
       enteredSleep();
@@ -320,9 +325,10 @@ describe('agent TTS in-flight cap', () => {
       await sleepStarted;
       await new Promise((resolve) => setTimeout(resolve, 40));
       samplesDuringSleep.push(inFlight);
-      expect(inFlight).toBeLessThanOrEqual(IN_FLIGHT_CAP);
+      expect(inFlight).toBe(0);
       expect(peak).toBeLessThanOrEqual(IN_FLIGHT_CAP);
-      expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // The slot is free, but this connection's Retry-After still blocks the peer.
+      expect(mocks.generate.mock.calls.length).toBe(1);
     } finally {
       releaseSleep();
     }
@@ -386,10 +392,176 @@ describe('agent TTS in-flight cap', () => {
     expect(peak).toBe(2);
     expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
   });
+
+  it('releases the in-flight slot during a retry sleep that is not a Retry-After', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const retried = new Set<string>();
+    let releaseSleep = () => {};
+    const sleepGate = new Promise<void>((resolve) => {
+      releaseSleep = resolve;
+    });
+    let enteredSleep: () => void = () => {};
+    const sleepStarted = new Promise<void>((resolve) => {
+      enteredSleep = resolve;
+    });
+    mocks.generate.mockImplementation(async (_config: unknown, text: unknown) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        const key = String(text);
+        if (!retried.has(key)) {
+          retried.add(key);
+          throw Object.assign(new Error('upstream'), { statusCode: 500 });
+        }
+        return { audio: new Uint8Array([1]), format: 'mp3' };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const sleep = async () => {
+      enteredSleep();
+      await sleepGate;
+    };
+    const pending = Promise.all([
+      synthesizeSceneNarration({
+        scene: scene('retry-a'),
+        force: false,
+        ownerId: 'user:alice',
+        sleep,
+      }),
+      synthesizeSceneNarration({
+        scene: scene('retry-b'),
+        force: false,
+        ownerId: 'user:alice',
+        sleep,
+      }),
+    ]);
+    try {
+      await sleepStarted;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(inFlight).toBeLessThanOrEqual(IN_FLIGHT_CAP);
+      expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      releaseSleep();
+    }
+    const summaries = await pending;
+    expect(peak).toBe(IN_FLIGHT_CAP);
+    expect(
+      summaries.every((summary) => summary.generated === 1 && summary.failed.length === 0),
+    ).toBe(true);
+  });
+
+  it('drops an idle connection gate so a later concurrency cap applies', async () => {
+    const previous = process.env.OPENMAIC_AGENT_TTS_CONCURRENCY;
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-evict-idle',
+      managed: false,
+    });
+    process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = '1';
+    mocks.generate.mockResolvedValue({ audio: new Uint8Array([1]), format: 'mp3' });
+    try {
+      await synthesizeSceneNarration({
+        scene: scene('warm'),
+        force: false,
+        ownerId: 'user:evict',
+      });
+      mocks.generate.mockClear();
+
+      process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = '3';
+      let inFlight = 0;
+      let peak = 0;
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      mocks.generate.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        try {
+          await gate;
+          return { audio: new Uint8Array([1]), format: 'mp3' };
+        } finally {
+          inFlight -= 1;
+        }
+      });
+      const pending = Promise.all(
+        Array.from({ length: 3 }, (_, index) =>
+          synthesizeSceneNarration({
+            scene: scene(`evict-${index}`),
+            force: false,
+            ownerId: 'user:evict',
+          }),
+        ),
+      );
+      try {
+        await vi.waitFor(() => expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(3));
+        expect(peak).toBe(3);
+        expect(inFlight).toBe(3);
+      } finally {
+        release();
+      }
+      const summaries = await pending;
+      expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.OPENMAIC_AGENT_TTS_CONCURRENCY;
+      else process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = previous;
+    }
+  });
+
+  it('keeps the connection gate while a caller is still in flight', async () => {
+    const previous = process.env.OPENMAIC_AGENT_TTS_CONCURRENCY;
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-evict-busy',
+      managed: false,
+    });
+    process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = '1';
+    let inFlight = 0;
+    let peak = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.generate.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        await gate;
+        return { audio: new Uint8Array([1]), format: 'mp3' };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const pending = Promise.all([
+      synthesizeSceneNarration({ scene: scene('busy-1'), force: false, ownerId: 'user:busy' }),
+      synthesizeSceneNarration({ scene: scene('busy-2'), force: false, ownerId: 'user:busy' }),
+    ]);
+    try {
+      await vi.waitFor(() => expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(1));
+      process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = '4';
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(mocks.generate.mock.calls.length).toBe(1);
+      expect(peak).toBe(1);
+      expect(inFlight).toBe(1);
+    } finally {
+      release();
+      if (previous === undefined) delete process.env.OPENMAIC_AGENT_TTS_CONCURRENCY;
+      else process.env.OPENMAIC_AGENT_TTS_CONCURRENCY = previous;
+    }
+    const summaries = await pending;
+    expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
+  });
 });
 
 describe('agent TTS failure classification', () => {
   beforeEach(() => {
+    resetAgentTtsProviderGatesForTests();
     vi.clearAllMocks();
     mocks.providers.mockResolvedValue(connection);
     mocks.persist.mockResolvedValue('/api/classroom-media/stage-a/media/tts.mp3');
@@ -457,6 +629,7 @@ describe('agent TTS failure classification', () => {
 
 describe('agent TTS classroom retry throttle', () => {
   beforeEach(() => {
+    resetAgentTtsProviderGatesForTests();
     vi.clearAllMocks();
     mocks.providers.mockResolvedValue(connection);
     mocks.persist.mockResolvedValue('/api/classroom-media/stage-a/media/tts.mp3');
@@ -598,5 +771,200 @@ describe('agent TTS classroom retry throttle', () => {
     expect(summary.failed).toEqual([{ id: 'speech-a', reason: 'PROVIDER_QUOTA_EXHAUSTED' }]);
     expect(summary.failed[0]?.reason).toBe(runFailureCode(error).errorCode);
     expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('waits out the last Retry-After before the next speech line', async () => {
+    const huge = DEFAULT_AGENT_TOOL_TIMEOUT_MS * 2;
+    const sleeps: number[] = [];
+    mocks.generate.mockImplementation(async (_config: unknown, text: unknown) => {
+      if (text === 'speech-1') throw new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, huge);
+      return { audio: new Uint8Array([1]), format: 'mp3' };
+    });
+
+    const summary = await synthesizeSceneNarration({
+      scene: speeches(['speech-1', 'speech-2']),
+      force: false,
+      ownerId: 'user:alice',
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(huge).toBeGreaterThan(DEFAULT_MAX_DELAY_MS);
+    expect(sleeps).toHaveLength(SCENE_MAX_RETRIES + 1);
+    expect(sleeps.slice(0, SCENE_MAX_RETRIES).every((ms) => ms === DEFAULT_MAX_DELAY_MS)).toBe(
+      true,
+    );
+    const carried = sleeps.at(-1) ?? 0;
+    expect(carried).toBeGreaterThanOrEqual(DEFAULT_MAX_DELAY_MS - 1_000);
+    expect(carried).toBeLessThanOrEqual(DEFAULT_MAX_DELAY_MS);
+    expect(summary.generated).toBe(1);
+    expect(summary.failed).toEqual([{ id: 'speech-1', reason: 'RATE_LIMITED' }]);
+    expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('makes a later narration call wait for the same connection Retry-After', async () => {
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-later-cooldown',
+      managed: false,
+    });
+    mocks.generate.mockRejectedValue(new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 4_000));
+    await synthesizeSceneNarration({
+      scene: scene('later-1'),
+      force: false,
+      ownerId: 'user:later',
+      sleep: async () => {},
+    });
+
+    const sleeps: number[] = [];
+    mocks.generate.mockImplementation(async () => {
+      return { audio: new Uint8Array([1]), format: 'mp3' };
+    });
+    const summary = await synthesizeSceneNarration({
+      scene: scene('later-2'),
+      force: false,
+      ownerId: 'user:later',
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(sleeps[0]).toBeGreaterThanOrEqual(3_000);
+    expect(sleeps[0]).toBeLessThanOrEqual(DEFAULT_MAX_DELAY_MS);
+    expect(summary.generated).toBe(1);
+    expect(summary.failed).toEqual([]);
+    expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('fails a later call instead of sleeping when the carried Retry-After exceeds the budget', async () => {
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-budget-carry',
+      managed: false,
+    });
+    mocks.generate.mockRejectedValue(new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 5_000));
+    await synthesizeSceneNarration({
+      scene: scene('budget-1'),
+      force: false,
+      ownerId: 'user:budget-carry',
+      sleep: async () => {},
+    });
+
+    const sleeps: number[] = [];
+    mocks.generate.mockClear();
+    const summary = await synthesizeSceneNarration({
+      scene: scene('budget-2'),
+      force: false,
+      ownerId: 'user:budget-carry',
+      budgetMs: 1_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(sleeps).toEqual([]);
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(summary.failed).toEqual([{ id: 'speech-budget-2', reason: 'RATE_LIMITED' }]);
+    expect(summary.generated).toBe(0);
+    expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('does not apply one connection Retry-After to another connection', async () => {
+    mocks.providers.mockImplementation(async (_kind: unknown, ownerId: unknown) => ({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: ownerId === 'user:other-cooldown' ? 'key-other-cooldown' : 'key-paced-cooldown',
+      managed: false,
+    }));
+    mocks.generate.mockImplementation(async (config: { apiKey?: string }) => {
+      if (config.apiKey === 'key-paced-cooldown') {
+        throw new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 5_000);
+      }
+      return { audio: new Uint8Array([1]), format: 'mp3' };
+    });
+    await synthesizeSceneNarration({
+      scene: scene('paced-conn'),
+      force: false,
+      ownerId: 'user:paced-cooldown',
+      sleep: async () => {},
+    });
+
+    const sleeps: number[] = [];
+    const summary = await synthesizeSceneNarration({
+      scene: scene('other-conn'),
+      force: false,
+      ownerId: 'user:other-cooldown',
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(sleeps).toEqual([]);
+    expect(summary.generated).toBe(1);
+    expect(summary.failed).toEqual([]);
+  });
+
+  it('shares one Retry-After across parallel narration calls on the same connection', async () => {
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-parallel-cooldown',
+      managed: false,
+    });
+    let releaseSleep = () => {};
+    const sleepGate = new Promise<void>((resolve) => {
+      releaseSleep = resolve;
+    });
+    let enteredSleep: () => void = () => {};
+    const sleepStarted = new Promise<void>((resolve) => {
+      enteredSleep = resolve;
+    });
+    mocks.generate.mockImplementation(async () => {
+      throw new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 5_000);
+    });
+    const sleep = async (ms: number) => {
+      expect(ms).toBeGreaterThanOrEqual(4_000);
+      expect(ms).toBeLessThanOrEqual(DEFAULT_MAX_DELAY_MS);
+      enteredSleep();
+      await sleepGate;
+    };
+    const first = synthesizeSceneNarration({
+      scene: scene('par-1'),
+      force: false,
+      ownerId: 'user:parallel-cooldown',
+      sleep,
+    });
+    await sleepStarted;
+    const callsAtSleep = mocks.generate.mock.calls.length;
+    const second = synthesizeSceneNarration({
+      scene: scene('par-2'),
+      force: false,
+      ownerId: 'user:parallel-cooldown',
+      sleep,
+    });
+    let summaries: Awaited<ReturnType<typeof synthesizeSceneNarration>>[];
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(mocks.generate.mock.calls.length).toBe(callsAtSleep);
+    } finally {
+      releaseSleep();
+      summaries = await Promise.all([first, second]);
+    }
+    expect(
+      summaries.every((summary) => summary.generated === 0 && summary.failed.length === 1),
+    ).toBe(true);
+    expect(
+      summaries
+        .flatMap((summary) => summary.failed)
+        .every((failure) => failure.reason === 'RATE_LIMITED'),
+    ).toBe(true);
+    expect(JSON.stringify(summaries)).not.toContain('RAW_PROVIDER_BODY');
   });
 });

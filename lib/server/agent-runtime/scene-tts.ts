@@ -39,7 +39,15 @@ export interface SceneTtsSummary {
 const AGENT_TTS_IN_FLIGHT_DEFAULT = 1;
 const AGENT_TTS_CONCURRENCY_ENV = 'OPENMAIC_AGENT_TTS_CONCURRENCY';
 
-const providerGates = new Map<string, ReturnType<typeof createSemaphore>>();
+interface ProviderGateEntry {
+  gate: ReturnType<typeof createSemaphore>;
+  /** Narration calls using this entry, including those waiting on Retry-After. */
+  callers: number;
+  /** Epoch ms. Provider calls on this connection wait until then. */
+  notBefore: number;
+}
+
+const providerGates = new Map<string, ProviderGateEntry>();
 
 function agentTtsInFlightLimit(): number {
   const raw = process.env[AGENT_TTS_CONCURRENCY_ENV]?.trim();
@@ -64,20 +72,73 @@ function connectionGateKey(connection: {
   return `account:${connection.providerId}\0${connection.baseUrl ?? ''}\0${keyHash}`;
 }
 
-function providerGate(connection: {
+type ConnectionGateIdentity = {
   providerId: string;
   baseUrl?: string;
   apiKey?: string;
   managed: boolean;
   deploymentProviderId?: string;
-}) {
-  const key = connectionGateKey(connection);
-  let gate = providerGates.get(key);
-  if (!gate) {
-    gate = createSemaphore(agentTtsInFlightLimit());
-    providerGates.set(key, gate);
+};
+
+function sweepIdleProviderGates(now: number) {
+  for (const [key, entry] of providerGates) {
+    if (entry.callers === 0 && entry.notBefore <= now) providerGates.delete(key);
   }
-  return gate;
+}
+
+function holdProviderGate(connection: ConnectionGateIdentity) {
+  sweepIdleProviderGates(Date.now());
+  const key = connectionGateKey(connection);
+  let entry = providerGates.get(key);
+  if (!entry) {
+    entry = { gate: createSemaphore(agentTtsInFlightLimit()), callers: 0, notBefore: 0 };
+    providerGates.set(key, entry);
+  }
+  entry.callers += 1;
+  return { key, entry };
+}
+
+function releaseProviderGate(held: { key: string; entry: ProviderGateEntry }) {
+  held.entry.callers -= 1;
+  if (
+    held.entry.callers === 0 &&
+    held.entry.notBefore <= Date.now() &&
+    providerGates.get(held.key) === held.entry
+  ) {
+    providerGates.delete(held.key);
+  }
+}
+
+function noteConnectionRetryAfter(entry: ProviderGateEntry, retryAfterMs: number) {
+  const clamped = Math.min(DEFAULT_MAX_DELAY_MS, retryAfterMs);
+  if (!(clamped > 0)) return;
+  entry.notBefore = Math.max(entry.notBefore, Date.now() + clamped);
+}
+
+function consumeConnectionCooldown(entry: ProviderGateEntry, coveredUntil: number) {
+  if (entry.notBefore <= coveredUntil) {
+    entry.notBefore = Math.min(entry.notBefore, Date.now());
+  }
+}
+
+function cooldownExceedsBudgetError(): Error {
+  return Object.assign(new Error('TTS retry wait exceeds the remaining tool budget'), {
+    statusCode: 429,
+    ttsBudgetWait: true,
+  });
+}
+
+function isTtsBudgetWaitError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { ttsBudgetWait?: unknown }).ttsBudgetWait === true
+  );
+}
+
+/** Test-only. Drops connection gates and their Retry-After deadlines. */
+export function resetAgentTtsProviderGatesForTests(): void {
+  providerGates.clear();
 }
 
 /** Model-visible tally. Error codes only, never action ids or provider bodies. */
@@ -111,6 +172,25 @@ function remainingBudgetMs(input: SceneTtsInput, startedAt: number): number {
   const fromTool = agentToolBudgetRemainingMs(input.signal);
   if (fromTool !== undefined) return fromTool;
   return (input.budgetMs ?? DEFAULT_AGENT_TOOL_TIMEOUT_MS) - (Date.now() - startedAt);
+}
+
+async function waitForConnectionCooldown(
+  entry: ProviderGateEntry,
+  input: SceneTtsInput,
+  startedAt: number,
+): Promise<void> {
+  for (;;) {
+    const deadline = entry.notBefore;
+    const wait = deadline - Date.now();
+    if (wait <= 0) return;
+    if (input.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (wait >= remainingBudgetMs(input, startedAt)) throw cooldownExceedsBudgetError();
+    await (input.sleep ?? abortableSleep)(wait, input.signal);
+    if (entry.notBefore <= deadline) {
+      entry.notBefore = Math.min(entry.notBefore, Date.now());
+      return;
+    }
+  }
 }
 
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -176,113 +256,134 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
   let generated = 0;
   let skipped = 0;
   const failed: SceneTtsFailure[] = [];
-  for (const action of input.scene.actions ?? []) {
-    if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
-    const speech = action as SpeechAction;
-    if (!input.force && speech.audioId) {
-      skipped += 1;
-      continue;
-    }
-    if (input.signal?.aborted) throw new Error('aborted');
-    // Same retry as a classroom narration clip: a retryable failure, including
-    // 429, sleeps before the next attempt, and never longer than that clip's
-    // backoff cap. The in-flight slot covers the provider call only; the retry
-    // sleep does not hold it. A wait the remaining tool budget cannot cover
-    // fails this line instead of sleeping. A timeout still aborts the tool
-    // instead of being retried.
-    let retryAfterMs = 0;
-    let lastError: unknown;
-    try {
-      const audio = await withRouteRetry(
-        async () => {
-          if (input.signal?.aborted) throw new Error('aborted');
-          try {
-            return await providerGate(connection).run(() =>
-              generateTTS(
-                {
-                  providerId,
-                  modelId,
-                  apiKey,
-                  baseUrl: connection.baseUrl,
-                  managed: connection.managed,
-                  publicOnly: connection.userEndpoint,
-                  voice,
-                  ...(connection.voices ? { voices: connection.voices } : {}),
-                  speed: speech.speed,
-                  // The provider's own options (a VoxCPM backend, say).
-                  providerOptions: adapterOptions(connection),
-                  signal: input.signal,
-                },
-                speech.text,
-              ),
-            );
-          } catch (error) {
-            lastError = error;
-            if (error instanceof TTSRateLimitError && error.retryAfterMs !== undefined) {
-              retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs);
-            }
-            throw error;
-          }
-        },
-        {
-          label: `agent-tts ${action.id}`,
-          maxRetries: SCENE_MAX_RETRIES,
-          refusalStatus: 400,
-          signal: input.signal,
-          sleep: (ms, signal) => {
-            if (signal?.aborted || input.signal?.aborted) {
-              throw new DOMException('Aborted', 'AbortError');
-            }
-            const pace = retryAfterMs;
-            retryAfterMs = 0;
-            const wait = Math.min(DEFAULT_MAX_DELAY_MS, Math.max(ms, pace));
-            if (wait > 0 && wait >= remainingBudgetMs(input, startedAt)) {
-              throw (
-                lastError ??
-                Object.assign(new Error('TTS retry wait exceeds the remaining tool budget'), {
-                  statusCode: 429,
-                })
-              );
-            }
-            return (input.sleep ?? abortableSleep)(wait, signal);
-          },
-          rethrow: (error) =>
-            error instanceof TTSRequestTimeoutError || input.signal?.aborted === true,
-        },
-      );
+  const held = holdProviderGate(connection);
+  try {
+    for (const action of input.scene.actions ?? []) {
+      if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
+      const speech = action as SpeechAction;
+      if (!input.force && speech.audioId) {
+        skipped += 1;
+        continue;
+      }
       if (input.signal?.aborted) throw new Error('aborted');
-      // The persisted reference is the RELATIVE classroom-media path (the
-      // agent runtime has no request origin; relative stays valid on any
-      // deployment origin — see classroom-media-bytes.ts). The browser's
-      // narration consumers (timeline status/preview, playback, exports)
-      // resolve a speech line through the legacy (audioId, audioUrl) pair:
-      // `audioId` alone is never resolvable to bytes client-side, while a
-      // present `audioUrl` marks the line voiced and is what the audio
-      // element / fetch fallback plays. Stamp the same relative path on both.
-      const audioId = await persistClassroomMediaBytes({
-        stageId: input.scene.stageId,
-        bytes: Buffer.from(audio.audio),
-        mime: audioMime(audio.format),
-        prefix: `tts-${action.id}`,
-        signal: input.signal,
-      });
-      speech.audioId = audioId;
-      (speech as LegacySpeechAction).audioUrl = audioId;
-      generated += 1;
-    } catch (error) {
-      if (input.signal?.aborted) throw error;
-      // A hung provider must fail the tool call with the retryable timeout
-      // error instead of degrading into a per-action failure: the remaining
-      // actions would hit the same hung upstream and the session would wedge.
-      if (error instanceof TTSRequestTimeoutError) throw error;
-      failed.push({ id: action.id, reason: runFailureCode(error).errorCode });
+      // Same retry as a classroom narration clip: a retryable failure, including
+      // 429, sleeps before the next attempt, and never longer than that clip's
+      // backoff cap. The in-flight slot covers the provider call only; the retry
+      // sleep and the connection cooldown wait do not hold it. Retry-After is
+      // stored on the connection, so the last attempt and a parallel call still
+      // wait before the next acquire. A wait the remaining tool budget cannot
+      // cover fails this line instead of sleeping. A timeout still aborts the tool
+      // instead of being retried.
+      let retryAfterMs = 0;
+      let lastError: unknown;
+      try {
+        const audio = await withRouteRetry(
+          async () => {
+            if (input.signal?.aborted) throw new Error('aborted');
+            for (;;) {
+              await waitForConnectionCooldown(held.entry, input, startedAt);
+              // Re-check inside the slot. A queued caller can be released after a
+              // sibling records Retry-After; leave the slot and wait outside it.
+              let deferred = false;
+              const audio = await held.entry.gate.run(async () => {
+                if (held.entry.notBefore > Date.now()) {
+                  deferred = true;
+                  return undefined;
+                }
+                try {
+                  return await generateTTS(
+                    {
+                      providerId,
+                      modelId,
+                      apiKey,
+                      baseUrl: connection.baseUrl,
+                      managed: connection.managed,
+                      publicOnly: connection.userEndpoint,
+                      voice,
+                      ...(connection.voices ? { voices: connection.voices } : {}),
+                      speed: speech.speed,
+                      // The provider's own options (a VoxCPM backend, say).
+                      providerOptions: adapterOptions(connection),
+                      signal: input.signal,
+                    },
+                    speech.text,
+                  );
+                } catch (error) {
+                  lastError = error;
+                  if (error instanceof TTSRateLimitError && error.retryAfterMs !== undefined) {
+                    retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs);
+                    noteConnectionRetryAfter(held.entry, error.retryAfterMs);
+                  }
+                  throw error;
+                }
+              });
+              if (!deferred) {
+                if (audio === undefined) throw new Error('TTS provider returned no audio');
+                return audio;
+              }
+            }
+          },
+          {
+            label: `agent-tts ${action.id}`,
+            maxRetries: SCENE_MAX_RETRIES,
+            refusalStatus: 400,
+            signal: input.signal,
+            sleep: async (ms, signal) => {
+              if (signal?.aborted || input.signal?.aborted) {
+                throw new DOMException('Aborted', 'AbortError');
+              }
+              const pace = retryAfterMs;
+              retryAfterMs = 0;
+              const wait = Math.min(DEFAULT_MAX_DELAY_MS, Math.max(ms, pace));
+              if (wait > 0 && wait >= remainingBudgetMs(input, startedAt)) {
+                throw lastError ?? cooldownExceedsBudgetError();
+              }
+              const coveredUntil = Date.now() + wait;
+              await (input.sleep ?? abortableSleep)(wait, signal);
+              consumeConnectionCooldown(held.entry, coveredUntil);
+            },
+            rethrow: (error) =>
+              error instanceof TTSRequestTimeoutError ||
+              input.signal?.aborted === true ||
+              isTtsBudgetWaitError(error),
+          },
+        );
+        if (input.signal?.aborted) throw new Error('aborted');
+        // The persisted reference is the RELATIVE classroom-media path (the
+        // agent runtime has no request origin; relative stays valid on any
+        // deployment origin — see classroom-media-bytes.ts). The browser's
+        // narration consumers (timeline status/preview, playback, exports)
+        // resolve a speech line through the legacy (audioId, audioUrl) pair:
+        // `audioId` alone is never resolvable to bytes client-side, while a
+        // present `audioUrl` marks the line voiced and is what the audio
+        // element / fetch fallback plays. Stamp the same relative path on both.
+        const audioId = await persistClassroomMediaBytes({
+          stageId: input.scene.stageId,
+          bytes: Buffer.from(audio.audio),
+          mime: audioMime(audio.format),
+          prefix: `tts-${action.id}`,
+          signal: input.signal,
+        });
+        speech.audioId = audioId;
+        (speech as LegacySpeechAction).audioUrl = audioId;
+        generated += 1;
+      } catch (error) {
+        if (input.signal?.aborted) throw error;
+        // A hung provider must fail the tool call with the retryable timeout
+        // error instead of degrading into a per-action failure: the remaining
+        // actions would hit the same hung upstream and the session would wedge.
+        if (error instanceof TTSRequestTimeoutError) throw error;
+        failed.push({ id: action.id, reason: runFailureCode(error).errorCode });
+      }
     }
+    return {
+      available: true,
+      changed: generated > 0,
+      generated,
+      skipped,
+      failed,
+    };
+  } finally {
+    releaseProviderGate(held);
   }
-  return {
-    available: true,
-    changed: generated > 0,
-    generated,
-    skipped,
-    failed,
-  };
 }

@@ -773,6 +773,57 @@ describe('agent TTS classroom retry throttle', () => {
     expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
   });
 
+  it('does not pace lines that were never attempted when HTTP 429 is a quota refusal with Retry-After', async () => {
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-quota-retry-after',
+      managed: false,
+    });
+    // generateTTS shape for HTTP 429 + MiniMax quota body (status_code 2056) + Retry-After.
+    const error = new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 5_000, {
+      cause: new ProviderQuotaExhaustedError('MiniMax', RAW_PROVIDER_BODY),
+    });
+    mocks.generate.mockRejectedValue(error);
+    const sleeps: number[] = [];
+    const summary = await synthesizeSceneNarration({
+      scene: speeches(['speech-1', 'speech-2']),
+      force: false,
+      ownerId: 'user:quota-retry-after',
+      budgetMs: 1_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(sleeps).toEqual([]);
+    expect(mocks.generate.mock.calls.map((call) => call[1])).toEqual(['speech-1', 'speech-2']);
+    expect(summary.failed).toEqual([
+      { id: 'speech-1', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+      { id: 'speech-2', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+    ]);
+    expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+
+    mocks.generate.mockClear();
+    const later = await synthesizeSceneNarration({
+      scene: scene('quota-later'),
+      force: false,
+      ownerId: 'user:quota-retry-after',
+      budgetMs: 1_000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(sleeps).toEqual([]);
+    expect(mocks.generate).toHaveBeenCalledTimes(1);
+    expect(later.failed).toEqual([
+      { id: 'speech-quota-later', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+    ]);
+    expect(JSON.stringify(later)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
   it('waits out the last Retry-After before the next speech line', async () => {
     const huge = DEFAULT_AGENT_TOOL_TIMEOUT_MS * 2;
     const sleeps: number[] = [];

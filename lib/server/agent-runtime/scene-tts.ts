@@ -134,6 +134,9 @@ function noteConnectionRetryAfter(entry: ProviderGateEntry, retryAfterMs: number
 }
 
 function consumeConnectionCooldown(entry: ProviderGateEntry, coveredUntil: number) {
+  // An injected sleep does not move Date.now(). Pull a covered deadline back to
+  // now so the next acquire does not wait forever. A real sleep has already
+  // passed it, so this assignment does not change notBefore.
   if (entry.notBefore <= coveredUntil) {
     entry.notBefore = Math.min(entry.notBefore, Date.now());
   }
@@ -204,6 +207,7 @@ async function waitForConnectionCooldown(
     if (input.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     if (wait >= remainingBudgetMs(input, startedAt)) throw cooldownExceedsBudgetError();
     await (input.sleep ?? abortableSleep)(wait, input.signal);
+    // Same fake-timer pullback as consumeConnectionCooldown.
     if (entry.notBefore <= deadline) {
       entry.notBefore = Math.min(entry.notBefore, Date.now());
       return;

@@ -627,7 +627,7 @@ describe('generation and deck tools', () => {
     expect(foreign.get()).toBeNull();
   });
 
-  it('keeps generate_tts content to the count sentence', async () => {
+  it('keeps generate_tts content to the failure tally and the kept-line note', async () => {
     const current = state(document([slide('a', 1, 'Intro')]));
     const raw = 'RAW_PROVIDER_BODY secret-upstream';
     const response = await find(
@@ -646,7 +646,9 @@ describe('generation and deck tools', () => {
     ).execute('call', { stageId: 'stage-test', order: 1 } as never);
 
     const text = (response.content[0] as { text: string }).text;
-    expect(text).toBe('Narration audio: 0 generated, 1 skipped, 1 failed (RATE_LIMITED\u00d71).');
+    expect(text).toBe(
+      'Narration audio: 0 generated, 1 skipped, 1 failed (RATE_LIMITED\u00d71). 1 line(s) kept their existing audio and voice; pass force to re-synthesize them.',
+    );
     expect(text).not.toContain(raw);
     expect(text).not.toContain('speech-a');
     expect(response.details).toMatchObject({
@@ -769,5 +771,83 @@ describe('generation and deck tools', () => {
     expect(text).not.toContain('PROVIDER_QUOTA_EXHAUSTED');
     expect(text).not.toContain('speech-a');
     expect(synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('reports the narration voice and the failure tally together, including when every line fails', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const voice = {
+      binding: 'tts-x::warm',
+      source: 'roster-teacher' as const,
+      teacher: 'Ms. Lin',
+    };
+    const partial = {
+      available: true,
+      changed: true,
+      generated: 1,
+      skipped: 0,
+      failed: [
+        { id: 'speech-b', reason: 'RATE_LIMITED' },
+        { id: 'speech-c', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+      ],
+      voice,
+    };
+    const tally = '2 failed (RATE_LIMITED\u00d71, PROVIDER_QUOTA_EXHAUSTED\u00d71)';
+    const voiceNote = 'Voice: tts-x::warm (teacher "Ms. Lin"\'s roster binding).';
+    const textOf = (response: { content: ReadonlyArray<unknown> }) => {
+      const block = response.content[0];
+      return typeof block === 'object' &&
+        block !== null &&
+        'text' in block &&
+        typeof block.text === 'string'
+        ? block.text
+        : '';
+    };
+
+    const tts = await find(
+      buildDslCourseToolset(deps(current.store, { synthesizeTts: vi.fn(async () => partial) })),
+      'generate_tts',
+    ).execute('call-tts', { stageId: 'stage-test', order: 1 } as never);
+    const actions = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => partial),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call-actions', { stageId: 'stage-test', order: 1 } as never);
+
+    for (const text of [textOf(tts), textOf(actions)]) {
+      expect(text).toContain(tally);
+      expect(text).toContain(voiceNote);
+      expect(text).not.toContain('speech-b');
+      expect(text).not.toContain('speech-c');
+    }
+
+    const allFailed = {
+      available: true,
+      changed: false,
+      generated: 0,
+      skipped: 0,
+      failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+      voice,
+    };
+    const actionsZero = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => allFailed),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call-zero', { stageId: 'stage-test', order: 1 } as never);
+    const zeroText = textOf(actionsZero);
+    expect(zeroText).toContain(
+      'Narration audio: 0 generated, 0 skipped, 1 failed (RATE_LIMITED\u00d71).',
+    );
+    expect(zeroText).not.toContain(voiceNote);
+    expect(actionsZero.details).toMatchObject({
+      audio: { generated: 0, voice, failed: allFailed.failed },
+    });
   });
 });

@@ -1,7 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { DEFAULT_MAX_DELAY_MS } from '@openmaic/generation';
+import { Type } from 'typebox';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_AGENT_TOOL_TIMEOUT_MS } from '@/lib/agent/runtime/tool-timeout';
+import {
+  AGENT_TOOL_TIMEOUT_ENV,
+  DEFAULT_AGENT_TOOL_TIMEOUT_MS,
+  withAgentToolTimeout,
+} from '@/lib/agent/runtime/tool-timeout';
 import { TTSRateLimitError, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
 import type { SceneTtsFailure } from '@/lib/server/agent-runtime/scene-tts';
 import { runFailureCode, type RunFailureErrorCode } from '@/lib/server/generation/run/failure-code';
@@ -56,6 +62,21 @@ const connection = {
   userEndpoint: false,
   origin: 'configuration',
 };
+
+const ToolParams = Type.Object({});
+
+/** A generate_tts-shaped tool. That name is not in the per-tool timeout map, so the env budget is what withAgentToolTimeout stamps. */
+function generateTtsTool(
+  execute: AgentTool<typeof ToolParams>['execute'],
+): AgentTool<typeof ToolParams> {
+  return {
+    name: 'generate_tts',
+    label: 'Generate TTS',
+    description: 'Test tool',
+    parameters: ToolParams,
+    execute,
+  };
+}
 
 function scene(id: string): Scene {
   return {
@@ -213,6 +234,47 @@ describe('agent TTS in-flight cap', () => {
     const pending = Promise.all([
       synthesizeSceneNarration({ scene: scene('u1'), force: false, ownerId: 'user:a' }),
       synthesizeSceneNarration({ scene: scene('u2'), force: false, ownerId: 'user:b' }),
+    ]);
+    try {
+      await vi.waitFor(() => expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(peak).toBe(2);
+      expect(mocks.generate.mock.calls.length).toBe(2);
+    } finally {
+      release();
+    }
+    const summaries = await pending;
+    expect(peak).toBe(2);
+    expect(summaries.every((summary) => summary.generated === 1)).toBe(true);
+  });
+
+  it('does not block two unmanaged connections that differ only by providerId', async () => {
+    mocks.providers.mockImplementation(async (_kind: unknown, ownerId: unknown) => ({
+      ...connection,
+      providerId: ownerId === 'user:b' ? 'provider-b' : 'provider-a',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'shared-key',
+      managed: false,
+    }));
+    let inFlight = 0;
+    let peak = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.generate.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        await gate;
+        return { audio: new Uint8Array([1]), format: 'mp3' };
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const pending = Promise.all([
+      synthesizeSceneNarration({ scene: scene('p1'), force: false, ownerId: 'user:a' }),
+      synthesizeSceneNarration({ scene: scene('p2'), force: false, ownerId: 'user:b' }),
     ]);
     try {
       await vi.waitFor(() => expect(mocks.generate.mock.calls.length).toBeGreaterThanOrEqual(2));
@@ -923,6 +985,59 @@ describe('agent TTS classroom retry throttle', () => {
     expect(summary.failed).toEqual([{ id: 'speech-budget-2', reason: 'RATE_LIMITED' }]);
     expect(summary.generated).toBe(0);
     expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+  });
+
+  it('uses the stamped tool budget, not budgetMs, when Retry-After does not fit', async () => {
+    mocks.providers.mockResolvedValue({
+      ...connection,
+      providerId: 'configured-tts',
+      baseUrl: 'https://tts.example/v1',
+      apiKey: 'key-budget-signal',
+      managed: false,
+    });
+    mocks.generate.mockRejectedValue(new TTSRateLimitError('MiniMax', RAW_PROVIDER_BODY, 5_000));
+    await synthesizeSceneNarration({
+      scene: scene('budget-signal-1'),
+      force: false,
+      ownerId: 'user:budget-signal',
+      sleep: async () => {},
+    });
+
+    const sleeps: number[] = [];
+    mocks.generate.mockClear();
+    mocks.generate.mockResolvedValue({ audio: new Uint8Array([1]), format: 'mp3' });
+    const previousTimeout = process.env[AGENT_TOOL_TIMEOUT_ENV];
+    process.env[AGENT_TOOL_TIMEOUT_ENV] = '1000';
+    try {
+      let summary: Awaited<ReturnType<typeof synthesizeSceneNarration>> | undefined;
+      const tool = withAgentToolTimeout(
+        generateTtsTool(async (_id, _args, signal) => {
+          summary = await synthesizeSceneNarration({
+            scene: scene('budget-signal-2'),
+            force: false,
+            ownerId: 'user:budget-signal',
+            // Large enough to cover the 5s Retry-After. The stamped signal is shorter.
+            budgetMs: 60_000,
+            signal,
+            sleep: async (ms) => {
+              sleeps.push(ms);
+            },
+          });
+          return { content: [{ type: 'text', text: 'ok' }], details: {} };
+        }),
+      );
+
+      await tool.execute('call-budget-signal', {}, undefined);
+
+      expect(sleeps).toEqual([]);
+      expect(mocks.generate).not.toHaveBeenCalled();
+      expect(summary?.failed).toEqual([{ id: 'speech-budget-signal-2', reason: 'RATE_LIMITED' }]);
+      expect(summary?.generated).toBe(0);
+      expect(JSON.stringify(summary)).not.toContain('RAW_PROVIDER_BODY');
+    } finally {
+      if (previousTimeout === undefined) delete process.env[AGENT_TOOL_TIMEOUT_ENV];
+      else process.env[AGENT_TOOL_TIMEOUT_ENV] = previousTimeout;
+    }
   });
 
   it('does not apply one connection Retry-After to another connection', async () => {

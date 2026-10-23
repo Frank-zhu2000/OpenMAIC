@@ -11,7 +11,7 @@ import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/aud
 import { generateTTS, TTSRateLimitError, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
 import { runFailureCode, type RunFailureErrorCode } from '@/lib/server/generation/run/failure-code';
 import { SCENE_MAX_RETRIES, withRouteRetry } from '@/lib/server/generation/run/retry';
-import { ProviderQuotaExhaustedError } from '@/lib/server/provider-quota';
+import { isUpstreamQuotaExhausted } from '@/lib/server/llm-error-response';
 import { createSemaphore } from '@/lib/utils/concurrency';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { BROWSER_NATIVE_TTS_PROVIDER_ID } from '@/lib/audio/provider-enablement';
@@ -313,10 +313,12 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
                 } catch (error) {
                   lastError = error;
                   // Quota exhaustion is not a retryable rate limit. Do not keep its Retry-After.
+                  // MiniMax attaches ProviderQuotaExhaustedError; OpenAI-compatible
+                  // providers attach the JSON body as cause.data (insufficient_quota).
                   if (
                     error instanceof TTSRateLimitError &&
                     error.retryAfterMs !== undefined &&
-                    !(error.cause instanceof ProviderQuotaExhaustedError)
+                    !isUpstreamQuotaExhausted(error)
                   ) {
                     retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs);
                     noteConnectionRetryAfter(held.entry, error.retryAfterMs);

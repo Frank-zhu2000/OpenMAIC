@@ -772,7 +772,7 @@ describe('PlaybackEngine action navigation', () => {
     expect(spoken).toHaveLength(1);
     expect(spoken[0].text).toBe('半径がpiのとき、円周は2 piです。');
     expect(spoken[0].text).not.toContain('派');
-    expect(spoken[0].lang).not.toBe('zh-CN');
+    expect(spoken[0].lang).toBe('ja-JP');
   });
 
   it('browser TTS uses the selected ja-JP voice language for a kanji-only line', async () => {

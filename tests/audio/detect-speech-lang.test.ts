@@ -18,6 +18,12 @@ describe('detectSpeechLang', () => {
     expect(detectSpeechLang('Xin chào cả lớp!', 'zh-TW')).toBe('vi-VN');
   });
 
+  it('detects Japanese kana ahead of the kanji ratio and a Chinese interface locale', () => {
+    expect(detectSpeechLang('半径がpiのとき、円周は2 piです。', 'zh-CN')).toBe('ja-JP');
+    expect(detectSpeechLang('日本語の文章です', 'zh-CN')).toBe('ja-JP');
+    expect(detectSpeechLang('円周率', 'zh-CN')).toBe('zh-CN');
+  });
+
   it('detects Vietnamese by decisive letters (đ/ơ/ư/ê/ô)', () => {
     expect(detectSpeechLang('Xin chào cả lớp!')).toBe('vi-VN');
     expect(detectSpeechLang('Quang hợp ở thực vật diễn ra như thế nào?')).toBe('vi-VN');

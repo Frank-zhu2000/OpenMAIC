@@ -28,10 +28,13 @@ function createAbortError(): Error {
 const VI_DECIDER_RE = /[đĐơƠưƯ\u1EA0-\u1EF9]/;
 const VI_BROAD_RE = /[ăâêôĂÂÊÔ]/g;
 const VI_BROAD_THRESHOLD = 0.02;
+// Hiragana and katakana. The Han ratio cannot tell Japanese kanji from Chinese.
+const KANA_RE = /[\u3040-\u30ff]/u;
 
-/** Detect Chinese/Vietnamese text, retaining the UI's Chinese region when available. */
+/** Detect Japanese, Chinese, or Vietnamese. Kana wins over kanji; a Chinese UI locale keeps its region. */
 export function detectSpeechLang(text: string, fallbackLang = 'en-US'): string {
   if (!text) return fallbackLang || 'en-US';
+  if (KANA_RE.test(text)) return 'ja-JP';
   const cjkRatio = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length / text.length;
   if (cjkRatio > CJK_LANG_THRESHOLD) {
     // 汉字比例只能识别语言，不能区分地区；中文界面继续使用用户所在地区的音色。

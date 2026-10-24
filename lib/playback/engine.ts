@@ -825,7 +825,7 @@ export class PlaybackEngine {
     if (!this.isCurrentGeneration(generation)) return;
 
     // Set voice first so a ja-JP voice is not rewritten with the Chinese reading.
-    // Language detection then sees the spoken string, not extra Han from 派.
+    // With no voice, detectSpeechLang reads kana on the spoken string as ja-JP.
     let voiceFound = false;
     let speechLang: string | undefined;
     if (selectedVoice && selectedVoice !== 'default') {

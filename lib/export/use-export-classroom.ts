@@ -38,6 +38,7 @@ import { createProxiedFetch } from './proxied-fetch';
 import type { SceneContent, Scene, Stage } from '@/lib/types/stage';
 import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/document-persistence';
 import { accessDocument, type DocumentMigrationDeps } from '@/lib/document-store';
+import { sha256Hex } from '@/lib/legacy-browser-import/digest';
 
 export async function inlineSceneContent(
   content: SceneContent,
@@ -112,8 +113,8 @@ export function classroomExportBaseName(stageName: string): string {
 
 /** Common single-component filename limit (NAME_MAX), in UTF-8 bytes. */
 const CLASSROOM_EXPORT_FILENAME_MAX_BYTES = 255;
-/** Course ids are short; the cap stops a hostile id from crowding out the title. */
-const CLASSROOM_EXPORT_ID_MAX_CHARS = 64;
+/** Truncated SHA-256 hex length. Long enough to tell courses apart, short enough for a filename. */
+const CLASSROOM_EXPORT_ID_FINGERPRINT_HEX_CHARS = 16;
 
 function takeUtf8Prefix(value: string, maxBytes: number): string {
   if (maxBytes <= 0) return '';
@@ -130,8 +131,8 @@ function takeUtf8Prefix(value: string, maxBytes: number): string {
 }
 
 function classroomExportIdFragment(stageId: string): string {
-  const safe = stageId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, CLASSROOM_EXPORT_ID_MAX_CHARS);
-  return safe || 'course';
+  // The raw id is a bearer read capability on server persistence, so the name keeps only a one-way prefix.
+  return sha256Hex(stageId).slice(0, CLASSROOM_EXPORT_ID_FINGERPRINT_HEX_CHARS);
 }
 
 /** Compact form of `manifest.exportedAt`, milliseconds included (`20260916T023456789Z`). */
@@ -141,12 +142,12 @@ function classroomExportStamp(exportedAt: string): string {
 }
 
 /**
- * `<title>-<courseId>-<exportedAt>.maic.zip`.
+ * `<title>-<fingerprint>-<exportedAt>.maic.zip`.
  *
- * Server-minted course ids share the `stage-` prefix, so a few-character prefix
- * would not distinguish them. The stamp is the exact `manifest.exportedAt` value with
- * separators removed. The title is shortened on code-point boundaries so the
- * UTF-8 name stays within 255 bytes.
+ * The fingerprint is a truncated SHA-256 of the course id, not the id itself.
+ * The stamp is the exact `manifest.exportedAt` value with separators removed.
+ * The title is shortened on code-point boundaries so the UTF-8 name stays
+ * within 255 bytes.
  */
 export function classroomExportFileName(
   stageName: string,

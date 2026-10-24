@@ -80,8 +80,11 @@ describe('classroom ZIP download filenames', () => {
     const second = await exportClassroom('stage-course-b', '网络入门');
 
     expect(first.fileName).not.toBe(second.fileName);
-    expect(first.fileName).toContain('stage-course-a');
-    expect(second.fileName).toContain('stage-course-b');
+    expect(first.fileName).not.toContain('stage-course-a');
+    expect(second.fileName).not.toContain('stage-course-b');
+    // First 16 hex chars of SHA-256(stage id), from Node crypto, not the app helper.
+    expect(first.fileName).toContain('-9e897d5ca5f53d93-');
+    expect(second.fileName).toContain('-fa7d0a39939a145d-');
     expect(first.fileName.endsWith('.maic.zip')).toBe(true);
     expect(second.fileName.endsWith('.maic.zip')).toBe(true);
   });
@@ -94,6 +97,10 @@ describe('classroom ZIP download filenames', () => {
     const second = await exportClassroom('stage-course-a', '网络入门');
 
     expect(first.fileName).not.toBe(second.fileName);
+    expect(first.fileName).not.toContain('stage-course-a');
+    expect(second.fileName).not.toContain('stage-course-a');
+    expect(first.fileName).toContain('-9e897d5ca5f53d93-');
+    expect(second.fileName).toContain('-9e897d5ca5f53d93-');
 
     const firstManifest = await manifestOf(first.zip);
     const secondManifest = await manifestOf(second.zip);
@@ -109,7 +116,9 @@ describe('classroom ZIP download filenames', () => {
     expect(result.fileName).not.toMatch(UNSAFE_FILENAME);
     expect(result.fileName.endsWith('.maic.zip')).toBe(true);
     expect(result.fileName).toContain('A_B_C_D_E_F_G_H_I_J');
-    expect(result.fileName).toContain('bad_id_1');
+    expect(result.fileName).not.toContain('bad/id:1');
+    expect(result.fileName).not.toContain('bad_id_1');
+    expect(result.fileName).toContain('-f70e65ab028bc517-');
   });
 
   it('keeps a long Unicode title inside a 255-byte filename', async () => {
@@ -117,8 +126,9 @@ describe('classroom ZIP download filenames', () => {
 
     expect(new TextEncoder().encode(result.fileName).length).toBeLessThanOrEqual(255);
     expect(result.fileName.endsWith('.maic.zip')).toBe(true);
-    expect(result.fileName).toContain('stage-course-a');
-    const title = result.fileName.split('-stage-course-a-')[0] ?? '';
+    expect(result.fileName).not.toContain('stage-course-a');
+    expect(result.fileName).toContain('-9e897d5ca5f53d93-');
+    const title = result.fileName.split('-9e897d5ca5f53d93-')[0] ?? '';
     expect(title.length).toBeGreaterThan(0);
     expect([...title].every((char) => char === '😀')).toBe(true);
   });
@@ -128,6 +138,7 @@ describe('classroom ZIP download filenames', () => {
     const bytes = new TextEncoder().encode(result.fileName).length;
     expect(bytes).toBeLessThanOrEqual(255);
     expect(bytes).toBeGreaterThan(200);
-    expect(result.fileName).toMatch(/^a+-stage-course-a-\d{8}T\d{9}Z\.maic\.zip$/);
+    expect(result.fileName).not.toContain('stage-course-a');
+    expect(result.fileName).toMatch(/^a+-9e897d5ca5f53d93-\d{8}T\d{9}Z\.maic\.zip$/);
   });
 });

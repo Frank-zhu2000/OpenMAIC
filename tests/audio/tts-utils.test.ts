@@ -51,6 +51,24 @@ describe('splitLongSpeechText', () => {
       ).toBe(false);
     }
   });
+
+  it('keeps whitespace after sentence delimiters on the following unit', () => {
+    const text = '甲。 乙！ 丙？ 丁! 戊； 己; 庚： 辛: 壬\n 癸';
+    const out = splitLongSpeechText(text, 4);
+    expect(out.join('')).toBe(text);
+    expect(out.every((chunk) => chunk.length <= 4)).toBe(true);
+    expect(out.some((chunk) => chunk.length === 0)).toBe(false);
+  });
+
+  it('keeps a newline that fits on neither neighboring sentence', () => {
+    const left = '字'.repeat(8) + '。';
+    const right = '字'.repeat(9);
+    const text = `${left}\n${right}`;
+    const out = splitLongSpeechText(text, left.length);
+    expect(out.join('')).toBe(text);
+    expect(out.every((chunk) => chunk.length <= left.length)).toBe(true);
+    expect(out.some((chunk) => chunk.length === 0)).toBe(false);
+  });
 });
 
 describe('splitLongSpeechActions', () => {
@@ -182,6 +200,64 @@ describe('splitLongSpeechActions', () => {
     expect(out.map((action) => action.text).join('')).toBe(caption);
     for (const chunk of out.map((action) => action.text)) {
       expect(chunk.includes('π')).toBe(true);
+      expect(normalizeMathSymbolsForTts(chunk, 'ja').length).toBeLessThanOrEqual(max);
+      expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
+    }
+  });
+
+  it('uses the trimmed chunk when only outer padding exceeds the spoken budget', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    const text = ` ${'字'.repeat(max - 2)}π\n`;
+    const trimmed = text.trim();
+
+    expect(text.length).toBe(max + 1);
+    expect(normalizeMathSymbolsForTts(text, 'zh').length).toBe(max + 1);
+    expect(normalizeMathSymbolsForTts(text, 'ja-JP').length).toBe(max + 2);
+    expect(normalizeMathSymbolsForTts(trimmed, 'ja-JP').length).toBe(max);
+
+    const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+    expect(out.map((action) => action.text).join('')).toBe(trimmed);
+    expect(out).toHaveLength(1);
+    for (const chunk of out.map((action) => action.text)) {
+      expect(chunk.includes('派') || chunk.includes('pi')).toBe(false);
+      expect(normalizeMathSymbolsForTts(chunk, 'ja-JP').length).toBeLessThanOrEqual(max);
+      expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
+    }
+  });
+
+  it('keeps spaces after sentence punctuation when a caption is split for the spoken budget', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    const text = `Hello!  ${'x'.repeat(max - 9)}α`;
+
+    expect(text.length).toBe(max);
+    expect(text.startsWith('Hello!  ')).toBe(true);
+    expect(normalizeMathSymbolsForTts(text, 'zh').length).toBe(max + 2);
+    expect(normalizeMathSymbolsForTts(text, 'ja').length).toBe(max + 5);
+
+    const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.map((action) => action.text).join('')).toBe(text.trim());
+    for (const chunk of out.map((action) => action.text)) {
+      expect(chunk.includes('阿尔法') || chunk.includes('alpha')).toBe(false);
+      expect(normalizeMathSymbolsForTts(chunk, 'ja').length).toBeLessThanOrEqual(max);
+      expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
+    }
+  });
+
+  it('keeps the space after a full stop when Japanese expansion crosses the limit', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    const text = `${'甲'.repeat(400)}。 ${'乙'.repeat(621)}π`;
+
+    expect(text.length).toBe(max);
+    expect(text.includes('。 ')).toBe(true);
+    expect(normalizeMathSymbolsForTts(text, 'zh').length).toBe(max);
+    expect(normalizeMathSymbolsForTts(text, 'ja').length).toBe(max + 1);
+
+    const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.map((action) => action.text).join('')).toBe(text.trim());
+    for (const chunk of out.map((action) => action.text)) {
+      expect(chunk.includes('派') || chunk.includes('pi')).toBe(false);
       expect(normalizeMathSymbolsForTts(chunk, 'ja').length).toBeLessThanOrEqual(max);
       expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
     }

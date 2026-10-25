@@ -153,10 +153,23 @@ export function splitLongSpeechText(
   const normalized = text.trim();
   if (!normalized || lengthOf(normalized) <= maxLength) return [normalized];
 
-  const units = normalized
-    .split(/(?<=[。！？!?；;：:\n])/u)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  // Only the outer string is trimmed. Whitespace after a sentence delimiter stays
+  // on the following unit, so the chunks still join back to the caption.
+  const units: string[] = [];
+  let delimiterWhitespace = '';
+  for (const part of normalized.split(/(?<=[。！？!?；;：:\n])/u)) {
+    if (!part) continue;
+    if (!part.trim()) {
+      delimiterWhitespace += part;
+      continue;
+    }
+    units.push(delimiterWhitespace + part);
+    delimiterWhitespace = '';
+  }
+  if (delimiterWhitespace) {
+    if (units.length > 0) units[units.length - 1] += delimiterWhitespace;
+    else units.push(delimiterWhitespace);
+  }
 
   const chunks: string[] = [];
   let current = '';
@@ -250,7 +263,16 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
       return [action];
 
     const chunks = splitLongSpeechText(action.text, maxLength, lengthOf);
-    if (chunks.length <= 1) return [action];
+    // Outer padding can leave one trimmed chunk that fits. Sending the original
+    // action would keep the padding that crossed the spoken budget.
+    if (chunks.length <= 1) {
+      const fitted = chunks[0];
+      if (!fitted || fitted === action.text || lengthOf(fitted) > maxLength) {
+        return [action];
+      }
+      didSplit = true;
+      return [{ ...action, text: fitted }];
+    }
     didSplit = true;
     const { audioId: _audioId, ...baseAction } = action as SpeechAction;
 

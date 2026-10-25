@@ -59,6 +59,12 @@ export interface SpeechAction extends ActionBase {
   audioInvalidated?: boolean;
   voice?: string;
   speed?: number; // default 1.0
+  /**
+   * Reading locale for a chunk cut from a longer line. A kana-free piece keeps
+   * `ja-JP` so a later synthesis does not pronounce π as 派. Absent on an unsplit
+   * line. Cleared when `text` changes. Additive, so `DSL_VERSION` stays put.
+   */
+  readingLanguage?: string;
 }
 
 /** Open whiteboard (wait for animation) */

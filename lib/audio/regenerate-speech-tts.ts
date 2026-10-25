@@ -8,6 +8,7 @@
 import { db } from '@/lib/device-storage/database';
 import { serverTTSAvailable } from '@/lib/audio/tts-selection';
 import { generateAndStoreTTS } from '@/lib/audio/narration-tts';
+import { speechChunkReadingLanguage } from '@/lib/audio/tts-utils';
 import { useStageStore } from '@/lib/store/stage';
 import { resolveAudioBlob } from '@/lib/media/resolve-audio-bytes';
 import { mayGenerateForStage } from '@/lib/classroom/generation-permission';
@@ -103,7 +104,7 @@ export async function discardSpeechAudio(
  */
 export async function regenerateSpeechAudio(
   sceneOrder: number,
-  action: { id?: string; text?: string; audioId?: string },
+  action: { id?: string; text?: string; audioId?: string; readingLanguage?: string },
   language?: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
@@ -116,5 +117,19 @@ export async function regenerateSpeechAudio(
   // asset, so it is gated exactly like every other way generation starts. The
   // surfaces withhold the control too; refusing here keeps the two one rule.
   if (!mayGenerateForStage(stageId)) return null;
-  return generateAndStoreTTS(requestId, text, language, signal, undefined, stageId);
+  const readingLanguage = speechChunkReadingLanguage(action);
+  if (!readingLanguage) {
+    return generateAndStoreTTS(requestId, text, language, signal, undefined, stageId);
+  }
+  return generateAndStoreTTS(
+    requestId,
+    text,
+    language,
+    signal,
+    undefined,
+    stageId,
+    undefined,
+    0,
+    readingLanguage,
+  );
 }

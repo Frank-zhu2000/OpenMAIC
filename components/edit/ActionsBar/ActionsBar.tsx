@@ -281,6 +281,7 @@ export function SpeechTtsBar({
   audioInvalidated,
   sceneOrder,
   language,
+  readingLanguage,
   text,
   refreshKey,
   regenerating,
@@ -293,6 +294,8 @@ export function SpeechTtsBar({
   audioInvalidated?: boolean;
   sceneOrder: number;
   language?: string;
+  /** Japanese reading locale saved on a split chunk. */
+  readingLanguage?: string;
   text: string;
   refreshKey?: number;
   regenerating?: boolean;
@@ -440,7 +443,7 @@ export function SpeechTtsBar({
       const previousAudioId = audioId;
       const id = await regenerateSpeechAudio(
         sceneOrder,
-        { id: actionId, text, audioId: previousAudioId },
+        { id: actionId, text, audioId: previousAudioId, readingLanguage },
         language,
       );
       if (id) {
@@ -527,6 +530,7 @@ function SpeechClip({
   audioInvalidated,
   sceneOrder,
   language,
+  readingLanguage,
   autoFocus,
   ttsActive,
   ttsRefresh,
@@ -550,6 +554,7 @@ function SpeechClip({
   audioInvalidated?: boolean;
   sceneOrder: number;
   language?: string;
+  readingLanguage?: string;
   autoFocus: boolean;
   ttsActive: boolean;
   ttsRefresh?: number;
@@ -648,6 +653,7 @@ function SpeechClip({
           audioInvalidated={audioInvalidated}
           sceneOrder={sceneOrder}
           language={language}
+          readingLanguage={readingLanguage}
           text={val}
           refreshKey={ttsRefresh}
           regenerating={regenerating}
@@ -1137,6 +1143,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
               id: liveAction.id,
               text: liveAction.text,
               audioId: previousAudioId,
+              readingLanguage: liveAction.readingLanguage,
             },
             language,
           );
@@ -1386,6 +1393,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                               audioInvalidated={
                                 (action as { audioInvalidated?: boolean }).audioInvalidated
                               }
+                              readingLanguage={action.readingLanguage}
                               sceneOrder={sceneOrder}
                               language={language}
                               ttsActive={ttsActive}

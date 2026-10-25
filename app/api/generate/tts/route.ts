@@ -74,6 +74,10 @@ export async function POST(req: NextRequest) {
     const requestedProviderId =
       typeof body.ttsProviderId === 'string' && body.ttsProviderId ? body.ttsProviderId : undefined;
     const requestedVoice = typeof body.ttsVoice === 'string' ? body.ttsVoice.trim() : undefined;
+    const readingLanguage =
+      typeof body.readingLanguage === 'string' && body.readingLanguage.trim()
+        ? body.readingLanguage.trim()
+        : undefined;
     audioId = body.audioId;
 
     // A voice that is sent must say something; an absent one means the default.
@@ -116,6 +120,7 @@ export async function POST(req: NextRequest) {
         requestedModelId: ttsModelId,
         speed: ttsSpeed,
         providerOptions: ttsProviderOptions,
+        ...(readingLanguage ? { readingLanguage } : {}),
         trace,
       },
       { log },

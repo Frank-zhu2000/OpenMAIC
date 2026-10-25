@@ -2,6 +2,7 @@ import { configuredDefaultVoice } from '@/lib/audio/provider-default-voice';
 import { authorizeMediaModel } from '@/lib/server/model-config/media';
 import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { generateTTS, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
+import { speechChunkReadingLanguage } from '@/lib/audio/tts-utils';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { BROWSER_NATIVE_TTS_PROVIDER_ID } from '@/lib/audio/provider-enablement';
 import type { LegacySpeechAction, SpeechAction } from '@/lib/types/action';
@@ -154,6 +155,7 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
           signal: input.signal,
         },
         speech.text,
+        speechChunkReadingLanguage(speech),
       );
       if (input.signal?.aborted) throw new Error('aborted');
       // The persisted reference is the RELATIVE classroom-media path (the

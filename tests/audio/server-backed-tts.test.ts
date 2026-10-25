@@ -158,6 +158,30 @@ describe('server-backed narration storage', () => {
     expect(mocks.poolRemove).not.toHaveBeenCalled();
   });
 
+  it('sends a saved Japanese reading locale with the chunk text', async () => {
+    const { generateAndStoreTTS } = await import('@/lib/audio/narration-tts');
+    mockFetch.mockResolvedValueOnce(ttsResponse());
+
+    await generateAndStoreTTS(
+      'tts_request_s2_a_tts_1',
+      '円周率π。',
+      'zh-CN',
+      undefined,
+      undefined,
+      'course-1',
+      undefined,
+      0,
+      'ja-JP',
+    );
+
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as { body: string }).body) as {
+      text: string;
+      readingLanguage?: string;
+    };
+    expect(body.text).toBe('円周率π。');
+    expect(body.readingLanguage).toBe('ja-JP');
+  });
+
   // Storing narration failed, not synthesizing it: the line is left unvoiced
   // and retryable, as an image that cannot be stored leaves its slide.
   it('leaves the line unvoiced rather than failing when the pool refuses', async () => {

@@ -296,4 +296,24 @@ describe('splitLongSpeechActions', () => {
       expect(normalizeMathSymbolsForTts(action.text, 'ja').length).toBeLessThanOrEqual(max);
     }
   });
+
+  it('keeps the Japanese reading on a kana-free chunk after the action is saved', () => {
+    const text = `${'円周率π。'.repeat(169)}これは授業の説明です。`;
+    const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+    const saved = JSON.parse(JSON.stringify(out)) as SpeechAction[];
+
+    expect(saved.map((action) => action.text).join('')).toBe(text.trim());
+    expect(saved[0].text.includes('π')).toBe(true);
+    expect(saved[0].text.includes('こ')).toBe(false);
+    expect(saved[0].text.includes('派') || saved[0].text.includes('pi')).toBe(false);
+    expect(speechChunkReadingLanguage(saved[0])).toBe('ja-JP');
+
+    const spoken = normalizeMathSymbolsForTts(
+      saved[0].text,
+      speechReadingLanguage('zh', speechChunkReadingLanguage(saved[0])),
+    );
+    expect(spoken).toContain('pi');
+    expect(spoken).not.toContain('派');
+    expect(spoken).not.toContain('π');
+  });
 });

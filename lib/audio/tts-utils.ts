@@ -102,11 +102,10 @@ function prefersChineseGreekReading(text: string, language?: string): boolean {
   return HAN_RE.test(text);
 }
 
-const chunkReadingLanguage = new WeakMap<object, string>();
-
-/** Locale decided for a whole speech line and carried onto each split chunk. */
+/** Japanese reading locale stored on a split chunk. It survives saving the action. */
 export function speechChunkReadingLanguage(action: object): string | undefined {
-  return chunkReadingLanguage.get(action);
+  const stored = (action as { readingLanguage?: unknown }).readingLanguage;
+  return typeof stored === 'string' && isJapaneseSpeechLang(stored) ? stored : undefined;
 }
 
 /**
@@ -142,9 +141,9 @@ export function speechReadingLanguage(
  * `zh-CN`). Chinese narration uses the classroom reading, so `π` becomes `派`.
  * A line with kana, or a ja locale, uses the English letter name (`pi`). Han with
  * no kana uses 派, including an English-tagged voice. Greek (`el`) is left unchanged.
- * A space is added when the name sits against an
- * ASCII letter, a digit, or another Greek letter so `2πr` and `αβ` are not spoken
- * as one glued token. Text that
+ * English letter names gain a space when they sit against an
+ * ASCII letter, a digit, or another Greek letter, so `2πr` and `αβ` are not spoken
+ * as one glued token. Chinese readings stay glued (`2派r`, `阿尔法贝塔`). Text that
  * already uses a homophone is left unchanged — symbol-form output is best-effort,
  * and this does not repair a caption that already says 派.
  */
@@ -286,7 +285,8 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
     if (action.type !== 'speech' || !action.text) return [action];
 
     // Decide once on the whole line. Kana selects Japanese for every chunk, so
-    // a zh voice does not read a kana-free piece as 派. With no kana the voice is
+    // a zh voice does not read a kana-free piece as 派. That locale is stored on
+    // the chunk and survives a later regeneration. With no kana the voice is
     // unknown, so budget the longer of the zh and ja readings. The stored chunk
     // stays the original caption.
     const lineLanguage = speechLineReadingLanguage(action.text);
@@ -301,7 +301,7 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
 
     const chunks = splitLongSpeechText(action.text, maxLength, lengthOf);
     const carry = (next: SpeechAction): SpeechAction => {
-      if (lineLanguage) chunkReadingLanguage.set(next, lineLanguage);
+      if (lineLanguage) next.readingLanguage = lineLanguage;
       return next;
     };
     // Outer padding can leave one trimmed chunk that fits. Sending the original

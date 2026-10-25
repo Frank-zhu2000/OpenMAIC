@@ -844,10 +844,11 @@ export class PlaybackEngine {
     const chunkText = normalizeMathSymbolsForTts(rawChunk, readingLang);
     utterance.text = chunkText;
     if (!voiceFound) {
-      // No usable voice configured — tag the whole line so a kana-free sentence
-      // is not zh-CN. For Vietnamese additionally bind an installed vi voice
-      // when one exists, since browsers otherwise fall back to an English voice.
-      utterance.lang = detectSpeechLang(lineText, i18n.language);
+      // Kana anywhere on the line forces ja-JP for every sentence. Any other
+      // line keeps per-sentence detection on the spoken text, so a German
+      // sentence beside Chinese stays the interface locale. Vietnamese still
+      // binds an installed vi voice when one exists.
+      utterance.lang = readingLang ?? detectSpeechLang(chunkText, i18n.language);
       if (utterance.lang === 'vi-VN') {
         const viVoice = voices.find((v) => v.lang?.toLowerCase().startsWith('vi'));
         if (viVoice) {

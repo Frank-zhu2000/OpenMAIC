@@ -183,7 +183,13 @@ describe('setSpeechText / setElementId', () => {
   });
   test('setSpeechTextClearAudioById sets text and drops stale audio fields', () => {
     const xs: Action[] = [
-      { id: 'a', type: 'speech', text: 'old', audioId: 'tts_a' } as Action,
+      {
+        id: 'a',
+        type: 'speech',
+        text: 'old',
+        audioId: 'tts_a',
+        readingLanguage: 'ja-JP',
+      } as Action,
       A('b', 'spotlight'),
     ];
     const out = setSpeechTextClearAudioById(xs, 'a', 'new') as Array<{
@@ -194,6 +200,7 @@ describe('setSpeechText / setElementId', () => {
     expect(out[0].text).toBe('new');
     expect(out[0].audioId).toBeUndefined();
     expect(out[0].audioInvalidated).toBe(true);
+    expect(out[0]).not.toHaveProperty('readingLanguage');
     // index-stale-safe + type guard: missing id and non-speech are no-ops
     expect(setSpeechTextClearAudioById(xs, 'missing', 'x')).toBe(xs);
     expect(setSpeechTextClearAudioById(xs, 'b', 'x')).toBe(xs);

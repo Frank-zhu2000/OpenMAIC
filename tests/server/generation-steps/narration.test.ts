@@ -111,6 +111,7 @@ describe('narration step', () => {
         managed: true,
       }),
       'Hello class',
+      undefined,
     );
     expect(trace).toEqual({ providerId: 'openai-tts', voice: 'nova' });
     expect(mocks.recordGenerationUsage).toHaveBeenCalledWith(
@@ -132,6 +133,7 @@ describe('narration step', () => {
     expect(mocks.generateTTS).toHaveBeenCalledWith(
       expect.objectContaining({ voice: 'alloy' }),
       'Hello',
+      undefined,
     );
   });
 
@@ -167,6 +169,20 @@ describe('narration step', () => {
       format: stepped.format,
     });
     expect(mocks.generateTTS.mock.calls[0]).toEqual(routedCall);
+  });
+
+  it('forwards a saved reading locale from the route to generateTTS', async () => {
+    const { POST } = await import('@/app/api/generate/tts/route');
+    const response = await POST(
+      jsonRequest('http://localhost/api/generate/tts', {
+        text: '円周率π。',
+        audioId: 'a_tts_1',
+        ttsVoice: 'tongtong',
+        readingLanguage: 'ja-JP',
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.generateTTS).toHaveBeenCalledWith(expect.anything(), '円周率π。', 'ja-JP');
   });
 
   it('answers a refusal with the 400 the route always answered', async () => {

@@ -548,9 +548,10 @@ function clearStaleSpeechAudio(before: Scene, after: Scene): void {
     if (action?.type !== 'speech') continue;
     const previous = beforeById.get(action.id);
     if (!previous || previous.text === action.text) continue;
-    const legacy = action as typeof action & { audioUrl?: string };
+    const legacy = action as typeof action & { audioUrl?: string; readingLanguage?: string };
     delete legacy.audioId;
     delete legacy.audioUrl;
+    delete legacy.readingLanguage;
   }
 }
 
@@ -900,8 +901,8 @@ function currentIndexListing(scene: Scene, path: string | undefined): string {
  * when an action with the same id existed at batch start as a speech action
  * with the SAME text. A new or missing id (including an id reused after a
  * delete in this batch with different text) or changed text drops
- * audioId/audioUrl, since that audio was not generated for the current text.
- * Runs before missing ids are minted.
+ * audioId/audioUrl and the saved reading locale, since that audio was not
+ * generated for the current text. Runs before missing ids are minted.
  */
 function clearUnverifiedSpeechAudio(start: Scene, after: Scene): void {
   if (!Array.isArray(after.actions)) return;
@@ -912,9 +913,10 @@ function clearUnverifiedSpeechAudio(start: Scene, after: Scene): void {
     if (action?.type !== 'speech') continue;
     const original = typeof action.id === 'string' ? startById.get(action.id) : undefined;
     if (original?.type === 'speech' && original.text === action.text) continue;
-    const legacy = action as typeof action & { audioUrl?: string };
+    const legacy = action as typeof action & { audioUrl?: string; readingLanguage?: string };
     delete legacy.audioId;
     delete legacy.audioUrl;
+    delete legacy.readingLanguage;
   }
 }
 

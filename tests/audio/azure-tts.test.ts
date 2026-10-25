@@ -248,4 +248,32 @@ describe('Azure TTS SSML locale', () => {
     expect(directBody.input).toContain('派');
     expect(directBody.input).not.toContain('pi');
   });
+
+  it('sends pi for a saved kana-free chunk on glm tongtong', async () => {
+    const text = `${'円周率π。'.repeat(169)}これは授業の説明です。`;
+    const out = splitLongSpeechActions(
+      [{ id: 'a', type: 'speech', text }],
+      'glm-tts',
+    ) as SpeechAction[];
+    const saved = JSON.parse(JSON.stringify(out)) as SpeechAction[];
+    const first = saved[0];
+    expect(first.text.includes('こ')).toBe(false);
+
+    await generateTTS(
+      {
+        providerId: 'glm-tts',
+        apiKey: 'glm-key',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        voice: 'tongtong',
+      },
+      first.text,
+      speechChunkReadingLanguage(first),
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as { input: string };
+    expect(body.input).toContain('pi');
+    expect(body.input).not.toContain('派');
+    expect(body.input).not.toContain('π');
+    expect(first.text).toContain('π');
+  });
 });

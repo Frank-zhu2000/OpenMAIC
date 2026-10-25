@@ -95,7 +95,9 @@ export function setSpeechText(actions: Action[], index: number, text: string): A
   const a = actions[index];
   if (!a || a.type !== 'speech') return actions;
   const next = actions.slice();
-  next[index] = { ...a, text } as Action;
+  const updated = { ...a, text } as Action & { readingLanguage?: string };
+  if (a.text !== text) delete updated.readingLanguage;
+  next[index] = updated;
   return next;
 }
 
@@ -121,12 +123,19 @@ export function setSpeechTextClearAudioById(actions: Action[], id: string, text:
     ...a,
     text,
     audioInvalidated: true,
-  } as Action & { audioId?: string; audioUrl?: string; audioInvalidated?: boolean };
+  } as Action & {
+    audioId?: string;
+    audioUrl?: string;
+    audioInvalidated?: boolean;
+    readingLanguage?: string;
+  };
   delete cleaned.audioId;
   // The legacy URL of an unconverted pair points at the old wording's
   // narration just as much as the id does; keeping it would let a later
   // conversion ingest superseded audio for the new text.
   delete cleaned.audioUrl;
+  // The saved reading belonged to the previous caption.
+  delete cleaned.readingLanguage;
   next[index] = cleaned;
   return next;
 }

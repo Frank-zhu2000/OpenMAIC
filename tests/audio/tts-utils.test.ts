@@ -4,6 +4,7 @@ import {
   normalizeMathSymbolsForTts,
   speechChunkReadingLanguage,
   speechReadingLanguage,
+  previousSpeechTexts,
   splitLongSpeechText,
   splitLongSpeechActions,
   TTS_MAX_TEXT_LENGTH,
@@ -70,6 +71,16 @@ describe('splitLongSpeechText', () => {
     expect(out.join('')).toBe(text);
     expect(out.every((chunk) => chunk.length <= left.length)).toBe(true);
     expect(out.some((chunk) => chunk.length === 0)).toBe(false);
+  });
+
+  it('rejoins an English glm-tts run with one space, as previous speeches do', () => {
+    const long = `${'A sentence about light. '.repeat(30)}${'A sentence about water. '.repeat(30)}`;
+    const chunks = splitLongSpeechText(long, TTS_MAX_TEXT_LENGTH['glm-tts']!);
+    expect(chunks.length).toBeGreaterThan(1);
+    // The hard cut lands on the space before "water". That space stays in a chunk.
+    expect(chunks.join('')).toBe(long.trim());
+    // The next scene stores those chunk texts and rejoins them with a space.
+    expect(previousSpeechTexts(chunks).join(' ')).toBe(long.trim());
   });
 });
 

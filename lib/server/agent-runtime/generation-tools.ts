@@ -20,6 +20,7 @@ import type { AppDocumentOutline } from '@/lib/document-store/persistence-types'
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Action } from '@/lib/types/action';
 import type { Scene } from '@/lib/types/stage';
+import { previousSpeechTexts } from '@/lib/audio/tts-utils';
 import { COURSE_STAGE_ID_DESCRIPTION } from './course-stage';
 import type { CourseToolDeps } from './course-tools';
 import { runStageMutation } from './mutation-fence';
@@ -248,11 +249,11 @@ function actionContext(scenes: readonly Scene[], current: Scene): SceneGeneratio
     pageIndex: Math.max(0, index) + 1,
     totalPages: ordered.length,
     allTitles: ordered.map((scene) => scene.title),
-    previousSpeeches: (previous?.actions ?? [])
-      .filter((action) => action.type === 'speech')
-      .map((action) => action.text)
-      .filter(Boolean)
-      .slice(-3),
+    previousSpeeches: previousSpeechTexts(
+      (previous?.actions ?? [])
+        .filter((action) => action.type === 'speech')
+        .map((action) => action.text),
+    ).slice(-3),
   };
 }
 

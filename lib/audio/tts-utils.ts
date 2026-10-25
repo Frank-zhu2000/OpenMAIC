@@ -272,6 +272,20 @@ export function splitLongSpeechText(
 }
 
 /**
+ * Speech texts for the next scene. Stored chunks keep a hard cut's edge spaces
+ * so they still join back to the caption. Those edges are removed here: the
+ * classroom rejoins these strings with a space, and a kept edge would double it.
+ */
+export function previousSpeechTexts(texts: readonly string[]): string[] {
+  const threaded: string[] = [];
+  for (const text of texts) {
+    const trimmed = text.trim();
+    if (trimmed) threaded.push(trimmed);
+  }
+  return threaded;
+}
+
+/**
  * Split long speech actions into multiple shorter actions so each stays
  * within the TTS provider's text length limit. Each sub-action gets its
  * own independent audio file — no byte concatenation needed.

@@ -80,4 +80,29 @@ describe('splitLongSpeechActions', () => {
     // …and the text is preserved across the split.
     expect(out.map((a) => a.text).join('')).toBe(long);
   });
+
+  it('splits a caption that fits the raw limit once Greek letters are spoken', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    const text = `${'x'.repeat(max - 1)}α`;
+    const actions: Action[] = [speech('a', text)];
+    const out = splitLongSpeechActions(actions, 'glm-tts') as SpeechAction[];
+
+    expect(text.length).toBe(max);
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.map((action) => action.text).join('')).toBe(text);
+    expect(out.every((action) => action.id.startsWith('a_tts_'))).toBe(true);
+    for (const chunk of out.map((action) => action.text)) {
+      expect(chunk.includes('阿尔法') || chunk.includes('alpha')).toBe(false);
+      const hasAlpha = chunk.includes('α');
+      // 阿尔法 replaces α (+2). A preceding letter makes the English reading " alpha" (+5).
+      expect(chunk.length + (hasAlpha ? 2 : 0)).toBeLessThanOrEqual(max);
+      expect(chunk.length + (hasAlpha ? 5 : 0)).toBeLessThanOrEqual(max);
+    }
+  });
+
+  it('does not split a limit-length caption that has no expandable symbol', () => {
+    const text = 'x'.repeat(TTS_MAX_TEXT_LENGTH['glm-tts']!);
+    const actions: Action[] = [speech('a', text)];
+    expect(splitLongSpeechActions(actions, 'glm-tts')).toBe(actions);
+  });
 });

@@ -28,8 +28,9 @@ function createAbortError(): Error {
 const VI_DECIDER_RE = /[đĐơƠưƯ\u1EA0-\u1EF9]/;
 const VI_BROAD_RE = /[ăâêôĂÂÊÔ]/g;
 const VI_BROAD_THRESHOLD = 0.02;
-// Hiragana and katakana. The Han ratio cannot tell Japanese kanji from Chinese.
-const KANA_RE = /[\u3040-\u30ff]/u;
+// Hiragana and katakana letters. U+30FB (・) is a middle dot, not kana, so a
+// Chinese name such as 马丁・路德・金 stays on the Han-ratio path.
+const KANA_RE = /[\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff]/u;
 
 /** Detect Japanese, Chinese, or Vietnamese. Kana wins over kanji; a Chinese UI locale keeps its region. */
 export function detectSpeechLang(text: string, fallbackLang = 'en-US'): string {

@@ -155,4 +155,55 @@ describe('Azure TTS SSML locale', () => {
     expect(ssml).not.toContain('派');
     expect(ssml).not.toContain('π');
   });
+
+  it('does not spell Greek prose out in English for an el-GR voice', async () => {
+    const sentence = 'Η τιμή του π είναι περίπου 3.14';
+    await generateTTS(
+      {
+        providerId: 'azure-tts',
+        apiKey: 'azure-key',
+        baseUrl: 'https://eastus.tts.speech.microsoft.com',
+        voice: 'el-GR-AthinaNeural',
+      },
+      sentence,
+    );
+
+    const ssml = mockFetch.mock.calls[0][1].body as string;
+    expect(ssml).toContain("xml:lang='el-GR'");
+    expect(ssml).toContain(sentence);
+    expect(ssml).not.toContain('pi');
+    expect(ssml).not.toContain('eta');
+  });
+
+  it('reads a kanji-only line with a configured ja-JP voice, not the built-in catalogue', async () => {
+    await generateTTS(
+      {
+        providerId: 'openai-tts',
+        apiKey: 'test-key',
+        baseUrl: 'https://api.openai.com/v1',
+        voice: 'provider-local-ja',
+        voices: [{ id: 'provider-local-ja', name: 'Local JA', language: 'ja-JP' }],
+      },
+      '円周率π',
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as { input: string };
+    expect(body.input).toBe('円周率pi');
+  });
+
+  it('lets a configured voice language override the built-in catalogue', async () => {
+    await generateTTS(
+      {
+        providerId: 'openai-tts',
+        apiKey: 'test-key',
+        baseUrl: 'https://api.openai.com/v1',
+        voice: 'alloy',
+        voices: [{ id: 'alloy', name: 'Alloy', language: 'ja-JP' }],
+      },
+      '円周率π',
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as { input: string };
+    expect(body.input).toBe('円周率pi');
+  });
 });

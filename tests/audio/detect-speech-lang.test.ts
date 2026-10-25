@@ -24,6 +24,12 @@ describe('detectSpeechLang', () => {
     expect(detectSpeechLang('円周率', 'zh-CN')).toBe('zh-CN');
   });
 
+  it('does not treat a katakana middle dot as Japanese kana', () => {
+    expect(detectSpeechLang('马丁\u30fb路德\u30fb金', 'zh-CN')).toBe('zh-CN');
+    expect(detectSpeechLang('马丁\u30fb路德\u30fb金', 'en-US')).toBe('zh-CN');
+    expect(detectSpeechLang('\u30fb', 'zh-CN')).toBe('zh-CN');
+  });
+
   it('detects Vietnamese by decisive letters (đ/ơ/ư/ê/ô)', () => {
     expect(detectSpeechLang('Xin chào cả lớp!')).toBe('vi-VN');
     expect(detectSpeechLang('Quang hợp ở thực vật diễn ra như thế nào?')).toBe('vi-VN');

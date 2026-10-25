@@ -899,15 +899,29 @@ function resolveAzureVoiceLocale(voice: string): string {
   return voice.match(AZURE_VOICE_LOCALE_RE)?.[0] ?? 'zh-CN';
 }
 
+function listedVoiceLanguage(language: string | undefined): string | undefined {
+  if (!language || language === 'auto') return undefined;
+  return language;
+}
+
 /**
  * Speech locale for Greek-letter readings, when the selected voice has one.
+ * A deployment's voice list wins over the built-in catalogue, so a provider-local
+ * Japanese voice is not left unknown and then read with the Chinese table.
  * An unrecognised Azure id does not fall back to zh-CN here: that default is
  * only for the SSML language tag, and it would pronounce Japanese kanji as 派.
  */
 function ttsVoiceLanguage(config: TTSModelConfig): string | undefined {
+  const configured = listedVoiceLanguage(
+    config.voices?.find((voice) => voice.id === config.voice)?.language,
+  );
+  if (configured) return configured;
+
   const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
-  const catalogLanguage = provider?.voices.find((voice) => voice.id === config.voice)?.language;
-  if (catalogLanguage && catalogLanguage !== 'auto') return catalogLanguage;
+  const catalogLanguage = listedVoiceLanguage(
+    provider?.voices.find((voice) => voice.id === config.voice)?.language,
+  );
+  if (catalogLanguage) return catalogLanguage;
   if (config.providerId === 'azure-tts') return config.voice.match(AZURE_VOICE_LOCALE_RE)?.[0];
   return undefined;
 }

@@ -79,4 +79,19 @@ describe('normalizeMathSymbolsForTts', () => {
     expect(normalizeMathSymbolsForTts('αβ')).toBe('alpha beta');
     expect(normalizeMathSymbolsForTts('2πα')).toBe('2 pi alpha');
   });
+
+  it('does not rewrite Greek letters when narration is Greek', () => {
+    const sentence = 'Η τιμή του π είναι περίπου 3.14';
+    expect(normalizeMathSymbolsForTts(sentence, 'el-GR')).toBe(sentence);
+    expect(normalizeMathSymbolsForTts(sentence, 'el')).toBe(sentence);
+    expect(normalizeMathSymbolsForTts(sentence, 'el_GR')).toBe(sentence);
+    expect(normalizeMathSymbolsForTts('2πr', 'el-GR')).toBe('2πr');
+    expect(normalizeMathSymbolsForTts('2πr', 'en')).toBe('2 pi r');
+  });
+
+  it('does not treat a katakana middle dot as kana when choosing the Chinese reading', () => {
+    expect(normalizeMathSymbolsForTts('马丁\u30fb路德的π', 'zh-CN')).toBe('马丁\u30fb路德的派');
+    expect(normalizeMathSymbolsForTts('马丁\u30fb路德的π')).toBe('马丁\u30fb路德的派');
+    expect(normalizeMathSymbolsForTts('ジョン\u30fbスミスのπ')).toBe('ジョン\u30fbスミスのpi');
+  });
 });

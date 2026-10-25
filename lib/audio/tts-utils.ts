@@ -62,8 +62,13 @@ const ZH_GREEK_READING = greekReadingTable(1);
 const EN_GREEK_READING = greekReadingTable(2);
 const GREEK_LETTER_RE = new RegExp(`[${Object.keys(ZH_GREEK_READING).join('')}]`, 'gu');
 const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/u;
-/** Hiragana and katakana. Checked before Han, as in detectLegacyLanguage. */
-const KANA_RE = /[\u3040-\u30ff]/u;
+/**
+ * Hiragana and katakana letters, iteration marks, and the prolonged sound mark.
+ * U+30FB (・) and the other punctuation in U+3040–U+30FF are excluded so a
+ * Chinese name such as 马丁・路德・金 is not treated as Japanese.
+ * Checked before Han, as in detectLegacyLanguage.
+ */
+const KANA_RE = /[\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff]/u;
 const GREEK_CHAR = new Set(Object.keys(ZH_GREEK_READING));
 
 function primarySpeechSubtag(language: string): string {
@@ -78,6 +83,10 @@ function isChineseSpeechLang(language: string): boolean {
 
 function isJapaneseSpeechLang(language: string): boolean {
   return primarySpeechSubtag(language) === 'ja';
+}
+
+function isGreekSpeechLang(language: string): boolean {
+  return primarySpeechSubtag(language) === 'el';
 }
 
 /**
@@ -98,14 +107,19 @@ function prefersChineseGreekReading(text: string, language?: string): boolean {
  *
  * Pass `language` when the caller knows the voice or speech locale (`ja-JP`,
  * `zh-CN`). Chinese narration uses the classroom reading, so `π` becomes `派`.
- * Japanese and other non-Chinese narration use the English letter name (`pi`),
- * with a space when the name sits against an ASCII letter, a digit, or another
- * Greek letter so `2πr` and `αβ` are not spoken as one glued token. Text that
+ * Japanese and other narration use the English letter name (`pi`), except Greek
+ * (`el`), which is left unchanged. A space is added when the name sits against an
+ * ASCII letter, a digit, or another Greek letter so `2πr` and `αβ` are not spoken
+ * as one glued token. Text that
  * already uses a homophone is left unchanged — symbol-form output is best-effort,
  * and this does not repair a caption that already says 派.
  */
 export function normalizeMathSymbolsForTts(text: string, language?: string): string {
   if (!text) return text;
+  // A Greek voice already pronounces Greek letters. The English table would
+  // spell ordinary words out ("eta tau…") because those letters are also
+  // math symbols.
+  if (language && isGreekSpeechLang(language)) return text;
   GREEK_LETTER_RE.lastIndex = 0;
   if (!GREEK_LETTER_RE.test(text)) return text;
   GREEK_LETTER_RE.lastIndex = 0;
@@ -126,11 +140,18 @@ export function normalizeMathSymbolsForTts(text: string, language?: string): str
 /**
  * Split long text into chunks that respect sentence boundaries.
  * Tries splitting at sentence-ending punctuation first, then clause-level
- * punctuation, and finally hard-splits at maxLength as a last resort.
+ * punctuation, and finally hard-splits as a last resort.
+ * `lengthOf` defaults to the raw length. A spoken-length measure keeps each
+ * returned piece of the original text within the provider limit after symbol
+ * expansion.
  */
-export function splitLongSpeechText(text: string, maxLength: number): string[] {
+export function splitLongSpeechText(
+  text: string,
+  maxLength: number,
+  lengthOf: (value: string) => number = (value) => value.length,
+): string[] {
   const normalized = text.trim();
-  if (!normalized || normalized.length <= maxLength) return [normalized];
+  if (!normalized || lengthOf(normalized) <= maxLength) return [normalized];
 
   const units = normalized
     .split(/(?<=[。！？!?；;：:\n])/u)
@@ -150,7 +171,7 @@ export function splitLongSpeechText(text: string, maxLength: number): string[] {
       current = unit;
       return;
     }
-    if ((current + unit).length <= maxLength) {
+    if (lengthOf(current + unit) <= maxLength) {
       current += unit;
       return;
     }
@@ -158,11 +179,28 @@ export function splitLongSpeechText(text: string, maxLength: number): string[] {
     current = unit;
   };
 
+  const fittingPrefixLength = (unit: string): number => {
+    if (lengthOf(unit) <= maxLength) return unit.length;
+    let low = 1;
+    let high = unit.length - 1;
+    let best = 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (lengthOf(unit.slice(0, mid)) <= maxLength) {
+        best = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return best;
+  };
+
   const hardSplitUnit = (unit: string) => {
     const parts = unit.split(/(?<=[，,、])/u).filter(Boolean);
     if (parts.length > 1) {
       for (const part of parts) {
-        if (part.length <= maxLength) appendUnit(part);
+        if (lengthOf(part) <= maxLength) appendUnit(part);
         else hardSplitUnit(part);
       }
       return;
@@ -170,13 +208,14 @@ export function splitLongSpeechText(text: string, maxLength: number): string[] {
 
     let start = 0;
     while (start < unit.length) {
-      appendUnit(unit.slice(start, start + maxLength));
-      start += maxLength;
+      const size = fittingPrefixLength(unit.slice(start));
+      appendUnit(unit.slice(start, start + size));
+      start += Math.max(size, 1);
     }
   };
 
   for (const unit of units.length > 0 ? units : [normalized]) {
-    if (unit.length <= maxLength) appendUnit(unit);
+    if (lengthOf(unit) <= maxLength) appendUnit(unit);
     else hardSplitUnit(unit);
   }
 
@@ -193,12 +232,21 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
   const maxLength = TTS_MAX_TEXT_LENGTH[providerId];
   if (!maxLength) return actions;
 
+  // Budget for the longer spoken form. Chinese and English readings are the
+  // two expansions; a Greek voice does not expand. The stored chunk stays the
+  // original caption, so the symbol is not written back as a word.
+  const lengthOf = (value: string) =>
+    Math.max(
+      normalizeMathSymbolsForTts(value, 'zh').length,
+      normalizeMathSymbolsForTts(value, 'en').length,
+    );
+
   let didSplit = false;
   const nextActions: Action[] = actions.flatMap((action) => {
-    if (action.type !== 'speech' || !action.text || action.text.length <= maxLength)
+    if (action.type !== 'speech' || !action.text || lengthOf(action.text) <= maxLength)
       return [action];
 
-    const chunks = splitLongSpeechText(action.text, maxLength);
+    const chunks = splitLongSpeechText(action.text, maxLength, lengthOf);
     if (chunks.length <= 1) return [action];
     didSplit = true;
     const { audioId: _audioId, ...baseAction } = action as SpeechAction;

@@ -232,13 +232,14 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
   const maxLength = TTS_MAX_TEXT_LENGTH[providerId];
   if (!maxLength) return actions;
 
-  // Budget for the longer spoken form. Chinese and English readings are the
-  // two expansions; a Greek voice does not expand. The stored chunk stays the
+  // Longest spoken form. Han with no kana makes an `en` probe use the shorter
+  // Chinese reading (π → 派), while a ja voice says pi / alpha. Measure `ja`
+  // as well as `zh`. A Greek voice does not expand. The stored chunk stays the
   // original caption, so the symbol is not written back as a word.
   const lengthOf = (value: string) =>
     Math.max(
       normalizeMathSymbolsForTts(value, 'zh').length,
-      normalizeMathSymbolsForTts(value, 'en').length,
+      normalizeMathSymbolsForTts(value, 'ja').length,
     );
 
   let didSplit = false;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  normalizeMathSymbolsForTts,
   splitLongSpeechText,
   splitLongSpeechActions,
   TTS_MAX_TEXT_LENGTH,
@@ -103,6 +104,59 @@ describe('splitLongSpeechActions', () => {
   it('does not split a limit-length caption that has no expandable symbol', () => {
     const text = 'x'.repeat(TTS_MAX_TEXT_LENGTH['glm-tts']!);
     const actions: Action[] = [speech('a', text)];
+    expect(splitLongSpeechActions(actions, 'glm-tts')).toBe(actions);
+  });
+
+  it('splits a Han caption that fits in Chinese once the Japanese reading exceeds the limit', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    // 1024 characters. 派 is one character, so the Chinese reading stays 1024.
+    // pi is two, so ja-JP is 1025. The en probe still selects the Chinese table.
+    const text = `${'字'.repeat(max - 1)}π`;
+    const actions: Action[] = [speech('a', text)];
+
+    expect(text.length).toBe(max);
+    expect(normalizeMathSymbolsForTts(text, 'zh').length).toBe(max);
+    expect(normalizeMathSymbolsForTts(text, 'en').length).toBe(max);
+    expect(normalizeMathSymbolsForTts(text, 'ja-JP').length).toBe(max + 1);
+
+    const out = splitLongSpeechActions(actions, 'glm-tts') as SpeechAction[];
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.map((action) => action.text).join('')).toBe(text);
+    for (const chunk of out.map((action) => action.text)) {
+      expect(chunk.includes('派') || chunk.includes('pi')).toBe(false);
+      expect(normalizeMathSymbolsForTts(chunk, 'ja-JP').length).toBeLessThanOrEqual(max);
+      expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
+    }
+  });
+
+  it('keeps every Han chunk inside the Japanese spoken limit', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    // 980 characters, no sentence break. Japanese reads 1139.
+    const dense = `${'円'.repeat(900)}${'π'.repeat(80)}`;
+    // 1250 characters. A raw split packs 1020, which Japanese reads as 1224.
+    const repeated = '円周率π。'.repeat(250);
+
+    expect(dense.length).toBeLessThanOrEqual(max);
+    expect(normalizeMathSymbolsForTts(dense, 'ja').length).toBeGreaterThan(max);
+    expect(normalizeMathSymbolsForTts(repeated, 'ja').length).toBeGreaterThan(max);
+
+    for (const text of [dense, repeated]) {
+      const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+      expect(out.length).toBeGreaterThan(1);
+      expect(out.map((action) => action.text).join('')).toBe(text);
+      for (const chunk of out.map((action) => action.text)) {
+        expect(normalizeMathSymbolsForTts(chunk, 'ja').length).toBeLessThanOrEqual(max);
+        expect(normalizeMathSymbolsForTts(chunk, 'zh-CN').length).toBeLessThanOrEqual(max);
+      }
+    }
+  });
+
+  it('does not split a Han caption whose Japanese reading is exactly the limit', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    const text = `${'字'.repeat(max - 2)}π`;
+    const actions: Action[] = [speech('a', text)];
+
+    expect(normalizeMathSymbolsForTts(text, 'ja-JP').length).toBe(max);
     expect(splitLongSpeechActions(actions, 'glm-tts')).toBe(actions);
   });
 });

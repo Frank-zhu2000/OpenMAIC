@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   normalizeMathSymbolsForTts,
+  speechChunkReadingLanguage,
+  speechReadingLanguage,
   splitLongSpeechText,
   splitLongSpeechActions,
   TTS_MAX_TEXT_LENGTH,
@@ -260,6 +262,38 @@ describe('splitLongSpeechActions', () => {
       expect(chunk.includes('派') || chunk.includes('pi')).toBe(false);
       expect(normalizeMathSymbolsForTts(chunk, 'ja').length).toBeLessThanOrEqual(max);
       expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
+    }
+  });
+
+  it('keeps pi on every chunk when kana is only in a later sentence', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    const text = `${'円周率π。'.repeat(169)}これは授業の説明です。`;
+
+    expect(text.length).toBe(856);
+    expect(normalizeMathSymbolsForTts(text, 'ja').length).toBe(1025);
+    expect(normalizeMathSymbolsForTts(text, 'zh')).toContain('pi');
+    expect(normalizeMathSymbolsForTts(text, 'zh')).not.toContain('派');
+
+    const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.map((action) => action.text).join('')).toBe(text.trim());
+    expect(out[0].text.includes('π')).toBe(true);
+    expect(out[0].text.includes('こ')).toBe(false);
+
+    for (const action of out) {
+      expect(action.text.includes('派') || action.text.includes('pi')).toBe(false);
+      const carried = speechChunkReadingLanguage(action);
+      const spoken = normalizeMathSymbolsForTts(action.text, speechReadingLanguage('zh', carried));
+      expect(spoken).not.toContain('派');
+      if (action.text.includes('π')) expect(spoken).toContain('pi');
+      const budget = carried
+        ? normalizeMathSymbolsForTts(action.text, carried).length
+        : Math.max(
+            normalizeMathSymbolsForTts(action.text, 'zh').length,
+            normalizeMathSymbolsForTts(action.text, 'ja').length,
+          );
+      expect(budget).toBeLessThanOrEqual(max);
+      expect(normalizeMathSymbolsForTts(action.text, 'ja').length).toBeLessThanOrEqual(max);
     }
   });
 });

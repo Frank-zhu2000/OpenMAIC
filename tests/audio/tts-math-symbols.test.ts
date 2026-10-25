@@ -93,5 +93,7 @@ describe('normalizeMathSymbolsForTts', () => {
     expect(normalizeMathSymbolsForTts('马丁\u30fb路德的π', 'zh-CN')).toBe('马丁\u30fb路德的派');
     expect(normalizeMathSymbolsForTts('马丁\u30fb路德的π')).toBe('马丁\u30fb路德的派');
     expect(normalizeMathSymbolsForTts('ジョン\u30fbスミスのπ')).toBe('ジョン\u30fbスミスのpi');
+    expect(normalizeMathSymbolsForTts('カタカナπ', 'zh-CN')).toBe('カタカナpi');
+    expect(normalizeMathSymbolsForTts('カタカナπ')).toBe('カタカナpi');
   });
 });

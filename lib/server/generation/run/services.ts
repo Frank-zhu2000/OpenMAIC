@@ -98,6 +98,8 @@ export interface NarrateClipInput {
   audioId: string;
   voice: string;
   speed: number;
+  /** Whole-line kana decision, when this clip is a chunk that no longer has it. */
+  readingLanguage?: string;
   /** The voice's provider options (a VoxCPM voice prompt, say). */
   providerOptions?: Record<string, unknown>;
   /** The run's lease check, on the clip's asset allocation. */
@@ -515,6 +517,7 @@ export const defaultRunStepServices: RunStepServices = {
         connection: input.target.connection,
         requestedVoice: input.voice,
         speed: input.speed,
+        ...(input.readingLanguage ? { readingLanguage: input.readingLanguage } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       },
       ctx,

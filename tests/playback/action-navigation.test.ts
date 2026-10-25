@@ -802,6 +802,71 @@ describe('PlaybackEngine action navigation', () => {
     }
   });
 
+  it('keeps the whole-line Japanese reading when a sentence chunk has no kana', async () => {
+    const line = '円周率π。これは授業です。';
+    const spoken: Array<{ text: string; lang: string }> = [];
+    stubSpeechSynthesis(spoken);
+    setModelSettingsViewForTests({ tts: { registryId: 'browser-native-tts' } });
+
+    const { engine: actionEngine } = createActionEngine();
+    const { player } = createAudioPlayer(async () => false);
+    const onSpeechStart = vi.fn();
+    const engine = new PlaybackEngine([scene([speech('ja', line)])], actionEngine, player, {
+      onSpeechStart,
+    });
+
+    engine.start();
+    await flushPromises();
+
+    expect(onSpeechStart).toHaveBeenCalledWith(line);
+    expect(spoken[0].text).toBe('円周率pi。');
+    expect(spoken[0].text).not.toContain('派');
+    expect(spoken[0].lang).toBe('ja-JP');
+
+    (spoken[0] as { onend?: () => void }).onend?.();
+    await flushPromises();
+
+    expect(spoken).toHaveLength(2);
+    expect(spoken[1].text).toBe('これは授業です。');
+    expect(spoken[1].lang).toBe('ja-JP');
+  });
+
+  it('still reads split Chinese sentences as 派 and an English sentence as pi', async () => {
+    const chinese = '从负π到正π。这是下一句。';
+    const english = '2πr. The area is π.';
+    const spoken: Array<{ text: string; lang: string }> = [];
+    stubSpeechSynthesis(spoken);
+    setModelSettingsViewForTests({ tts: { registryId: 'browser-native-tts' } });
+
+    const { engine: actionEngine } = createActionEngine();
+    const { player } = createAudioPlayer(async () => false);
+    const engine = new PlaybackEngine(
+      [scene([speech('zh', chinese), speech('en', english)])],
+      actionEngine,
+      player,
+    );
+
+    engine.start();
+    await flushPromises();
+    expect(spoken[0].text).toBe('从负派到正派。');
+    expect(spoken[0].lang).toBe('zh-CN');
+
+    (spoken[0] as { onend?: () => void }).onend?.();
+    await flushPromises();
+    expect(spoken[1].text).toBe('这是下一句。');
+    expect(spoken[1].lang).toBe('zh-CN');
+
+    (spoken[1] as { onend?: () => void }).onend?.();
+    await flushPromises();
+    expect(spoken[2].text).toBe('2 pi r.');
+    expect(spoken[2].text).not.toContain('派');
+
+    (spoken[2] as { onend?: () => void }).onend?.();
+    await flushPromises();
+    expect(spoken[3].text).toBe('The area is pi.');
+    expect(spoken[3].text).not.toContain('派');
+  });
+
   it('jumping to the last line completes through normal completion flow', async () => {
     vi.useFakeTimers();
     const { engine: actionEngine } = createActionEngine();

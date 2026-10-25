@@ -50,7 +50,7 @@ import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { ttsSelection } from '@/lib/audio/tts-selection';
 import { detectSpeechLang } from '@/lib/audio/browser-tts-preview';
-import { normalizeMathSymbolsForTts } from '@/lib/audio/tts-utils';
+import { normalizeMathSymbolsForTts, speechLineReadingLanguage } from '@/lib/audio/tts-utils';
 import { createLogger } from '@/lib/logger';
 import i18n from '@/lib/i18n/config';
 
@@ -87,6 +87,7 @@ export class PlaybackEngine {
   // Browser-native TTS state (Web Speech API)
   private browserTTSActive: boolean = false;
   private browserTTSChunks: string[] = []; // sentence-level chunks for sequential playback
+  private browserTTSLineText = ''; // whole line, so kana is not re-detected per chunk
   private browserTTSChunkIndex: number = 0; // current chunk being spoken
   private browserTTSPausedChunks: string[] = []; // remaining chunks saved on pause (for cancel+re-speak)
   private speechTimerRemaining: number = 0; // remaining ms (set on pause)
@@ -790,6 +791,7 @@ export class PlaybackEngine {
    */
   private playBrowserTTS(speechAction: SpeechAction, generation: number): void {
     if (!this.isCurrentGeneration(generation)) return;
+    this.browserTTSLineText = speechAction.text;
     this.browserTTSChunks = this.splitIntoChunks(speechAction.text);
     this.browserTTSChunkIndex = 0;
     this.browserTTSPausedChunks = [];
@@ -825,26 +827,27 @@ export class PlaybackEngine {
     if (!this.isCurrentGeneration(generation)) return;
 
     // Set voice first so a ja-JP voice is not rewritten with the Chinese reading.
-    // With no voice, detectSpeechLang reads kana on the spoken string as ja-JP.
+    // Kana is decided on the whole line, then used for every sentence chunk.
     let voiceFound = false;
-    let speechLang: string | undefined;
+    let voiceLang: string | undefined;
     if (selectedVoice && selectedVoice !== 'default') {
       const voice = voices.find((v) => v.voiceURI === selectedVoice);
       if (voice) {
         utterance.voice = voice;
         utterance.lang = voice.lang;
-        speechLang = voice.lang || undefined;
+        voiceLang = voice.lang || undefined;
         voiceFound = true;
       }
     }
-    const chunkText = normalizeMathSymbolsForTts(rawChunk, speechLang);
+    const lineText = this.browserTTSLineText || rawChunk;
+    const readingLang = speechLineReadingLanguage(lineText, voiceFound ? voiceLang : undefined);
+    const chunkText = normalizeMathSymbolsForTts(rawChunk, readingLang);
     utterance.text = chunkText;
     if (!voiceFound) {
-      // No usable voice configured — detect text language so the browser
-      // auto-selects an appropriate voice. For Vietnamese additionally bind an
-      // installed vi voice when one exists, since browsers otherwise fall back
-      // to an English voice reading Vietnamese text.
-      utterance.lang = detectSpeechLang(chunkText, i18n.language);
+      // No usable voice configured — tag the whole line so a kana-free sentence
+      // is not zh-CN. For Vietnamese additionally bind an installed vi voice
+      // when one exists, since browsers otherwise fall back to an English voice.
+      utterance.lang = detectSpeechLang(lineText, i18n.language);
       if (utterance.lang === 'vi-VN') {
         const viVoice = voices.find((v) => v.lang?.toLowerCase().startsWith('vi'));
         if (viVoice) {

@@ -29,6 +29,8 @@ export interface NarrationInput {
   /** The model a deprecated request names; it applies only to a requested provider. */
   requestedModelId?: string;
   speed?: number;
+  /** Whole-line kana decision for a chunk that no longer contains the kana. */
+  readingLanguage?: string;
   /** The voice's provider options (a VoxCPM voice prompt or registered voice, say). */
   providerOptions?: Record<string, unknown>;
   /** Filled in as the provider and voice resolve, for the caller's failure log. */
@@ -157,7 +159,7 @@ export async function synthesizeNarration(
 
   // Generate audio
   authorizeMediaModel(connection, 'tts', config.modelId);
-  const { audio, format } = await generateTTS(config, text);
+  const { audio, format } = await generateTTS(config, text, input.readingLanguage);
 
   void recordGenerationUsage({
     kind: 'tts',

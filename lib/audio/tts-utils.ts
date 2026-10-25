@@ -66,7 +66,7 @@ const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/u;
  * Hiragana and katakana letters, iteration marks, and the prolonged sound mark.
  * U+30FB (・) and the other punctuation in U+3040–U+30FF are excluded so a
  * Chinese name such as 马丁・路德・金 is not treated as Japanese.
- * Checked before Han, as in detectLegacyLanguage.
+ * Checked before Han. detectLegacyLanguage still matches U+30FB; this class does not.
  */
 const KANA_RE = /[\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff]/u;
 const GREEK_CHAR = new Set(Object.keys(ZH_GREEK_READING));
@@ -102,13 +102,47 @@ function prefersChineseGreekReading(text: string, language?: string): boolean {
   return HAN_RE.test(text);
 }
 
+const chunkReadingLanguage = new WeakMap<object, string>();
+
+/** Locale decided for a whole speech line and carried onto each split chunk. */
+export function speechChunkReadingLanguage(action: object): string | undefined {
+  return chunkReadingLanguage.get(action);
+}
+
+/**
+ * Reading locale for one whole line. Kana anywhere selects Japanese, including
+ * for a later chunk that has none. An `el` voice keeps its locale. With no
+ * voice and no kana, the caller keeps the per-script heuristic.
+ */
+export function speechLineReadingLanguage(
+  text: string,
+  voiceLanguage?: string,
+): string | undefined {
+  if (voiceLanguage && isGreekSpeechLang(voiceLanguage)) return voiceLanguage;
+  if (KANA_RE.test(text)) {
+    return voiceLanguage && isJapaneseSpeechLang(voiceLanguage) ? voiceLanguage : 'ja-JP';
+  }
+  return voiceLanguage;
+}
+
+/** Voice locale, unless the line already decided on Japanese. Greek still wins. */
+export function speechReadingLanguage(
+  voiceLanguage?: string,
+  lineLanguage?: string,
+): string | undefined {
+  if (voiceLanguage && isGreekSpeechLang(voiceLanguage)) return voiceLanguage;
+  if (lineLanguage && isJapaneseSpeechLang(lineLanguage)) return lineLanguage;
+  return voiceLanguage ?? lineLanguage;
+}
+
 /**
  * Rewrite Greek letters into a spoken reading for TTS only.
  *
  * Pass `language` when the caller knows the voice or speech locale (`ja-JP`,
  * `zh-CN`). Chinese narration uses the classroom reading, so `π` becomes `派`.
- * Japanese and other narration use the English letter name (`pi`), except Greek
- * (`el`), which is left unchanged. A space is added when the name sits against an
+ * A line with kana, or a ja locale, uses the English letter name (`pi`). Han with
+ * no kana uses 派, including an English-tagged voice. Greek (`el`) is left unchanged.
+ * A space is added when the name sits against an
  * ASCII letter, a digit, or another Greek letter so `2πr` and `αβ` are not spoken
  * as one glued token. Text that
  * already uses a homophone is left unchanged — symbol-form output is best-effort,
@@ -247,22 +281,29 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
   const maxLength = TTS_MAX_TEXT_LENGTH[providerId];
   if (!maxLength) return actions;
 
-  // Longest spoken form. Han with no kana makes an `en` probe use the shorter
-  // Chinese reading (π → 派), while a ja voice says pi / alpha. Measure `ja`
-  // as well as `zh`. A Greek voice does not expand. The stored chunk stays the
-  // original caption, so the symbol is not written back as a word.
-  const lengthOf = (value: string) =>
-    Math.max(
-      normalizeMathSymbolsForTts(value, 'zh').length,
-      normalizeMathSymbolsForTts(value, 'ja').length,
-    );
-
   let didSplit = false;
   const nextActions: Action[] = actions.flatMap((action) => {
-    if (action.type !== 'speech' || !action.text || lengthOf(action.text) <= maxLength)
-      return [action];
+    if (action.type !== 'speech' || !action.text) return [action];
+
+    // Decide once on the whole line. Kana selects Japanese for every chunk, so
+    // a zh voice does not read a kana-free piece as 派. With no kana the voice is
+    // unknown, so budget the longer of the zh and ja readings. The stored chunk
+    // stays the original caption.
+    const lineLanguage = speechLineReadingLanguage(action.text);
+    const lengthOf = (value: string) => {
+      if (lineLanguage) return normalizeMathSymbolsForTts(value, lineLanguage).length;
+      return Math.max(
+        normalizeMathSymbolsForTts(value, 'zh').length,
+        normalizeMathSymbolsForTts(value, 'ja').length,
+      );
+    };
+    if (lengthOf(action.text) <= maxLength) return [action];
 
     const chunks = splitLongSpeechText(action.text, maxLength, lengthOf);
+    const carry = (next: SpeechAction): SpeechAction => {
+      if (lineLanguage) chunkReadingLanguage.set(next, lineLanguage);
+      return next;
+    };
     // Outer padding can leave one trimmed chunk that fits. Sending the original
     // action would keep the padding that crossed the spoken budget.
     if (chunks.length <= 1) {
@@ -271,7 +312,7 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
         return [action];
       }
       didSplit = true;
-      return [{ ...action, text: fitted }];
+      return [carry({ ...action, text: fitted })];
     }
     didSplit = true;
     const { audioId: _audioId, ...baseAction } = action as SpeechAction;
@@ -279,11 +320,13 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
     log.info(
       `Split speech for ${providerId}: action=${action.id}, len=${action.text.length}, chunks=${chunks.length}`,
     );
-    return chunks.map((chunk, i) => ({
-      ...baseAction,
-      id: `${action.id}_tts_${i + 1}`,
-      text: chunk,
-    }));
+    return chunks.map((chunk, i) =>
+      carry({
+        ...baseAction,
+        id: `${action.id}_tts_${i + 1}`,
+        text: chunk,
+      }),
+    );
   });
   return didSplit ? nextActions : actions;
 }

@@ -119,7 +119,7 @@ import {
 import { ProviderQuotaExhaustedError } from '@/lib/server/provider-quota';
 import { appAttributionHeaders } from '@/lib/config/app-attribution';
 import { pcmS16leMonoToWav } from './pcm-wav';
-import { normalizeMathSymbolsForTts } from './tts-utils';
+import { normalizeMathSymbolsForTts, speechReadingLanguage } from './tts-utils';
 
 const log = createLogger('TTSProviders');
 
@@ -295,6 +295,7 @@ export function throwIfTtsRateLimited(
 export async function generateTTS(
   config: TTSModelConfig,
   text: string,
+  readingLanguage?: string,
 ): Promise<TTSGenerationResult> {
   const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
 
@@ -304,7 +305,12 @@ export async function generateTTS(
   }
 
   // Captions keep the symbol. Only the provider request is pronounced.
-  const spokenText = normalizeMathSymbolsForTts(text, ttsVoiceLanguage(config));
+  // `readingLanguage` is the whole line's kana decision, carried onto a chunk
+  // that no longer contains the kana. A Greek voice still keeps its letters.
+  const spokenText = normalizeMathSymbolsForTts(
+    text,
+    speechReadingLanguage(ttsVoiceLanguage(config), readingLanguage),
+  );
   const signal = ttsRequestSignal(config.signal);
   try {
     switch (config.providerId) {
@@ -909,7 +915,8 @@ function listedVoiceLanguage(language: string | undefined): string | undefined {
  * A deployment's voice list wins over the built-in catalogue, so a provider-local
  * Japanese voice is not left unknown and then read with the Chinese table.
  * An unrecognised Azure id does not fall back to zh-CN here: that default is
- * only for the SSML language tag, and it would pronounce Japanese kanji as 派.
+ * only for the SSML language tag. Skipping it keeps non-Han text such as `2πr`
+ * off the Chinese table. Han with no kana is still 派 via the Han heuristic.
  */
 function ttsVoiceLanguage(config: TTSModelConfig): string | undefined {
   const configured = listedVoiceLanguage(

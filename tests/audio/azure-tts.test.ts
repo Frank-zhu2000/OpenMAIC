@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { generateTTS } from '@/lib/audio/tts-providers';
+import { speechChunkReadingLanguage, splitLongSpeechActions } from '@/lib/audio/tts-utils';
+import type { SpeechAction } from '@/lib/types/action';
 
 const mockFetch = vi.hoisted(() => vi.fn() as Mock);
 
@@ -205,5 +207,45 @@ describe('Azure TTS SSML locale', () => {
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as { input: string };
     expect(body.input).toBe('円周率pi');
+  });
+
+  it('sends pi for a kana-free chunk when the whole line decided Japanese', async () => {
+    const text = `${'円周率π。'.repeat(169)}これは授業の説明です。`;
+    const out = splitLongSpeechActions(
+      [{ id: 'a', type: 'speech', text }],
+      'glm-tts',
+    ) as SpeechAction[];
+    const first = out[0];
+    const carried = speechChunkReadingLanguage(first);
+    expect(carried).toBe('ja-JP');
+
+    await generateTTS(
+      {
+        providerId: 'glm-tts',
+        apiKey: 'glm-key',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        voice: 'tongtong',
+      },
+      first.text,
+      carried,
+    );
+
+    const carriedBody = JSON.parse(mockFetch.mock.calls[0][1].body as string) as { input: string };
+    expect(carriedBody.input).toContain('pi');
+    expect(carriedBody.input).not.toContain('派');
+    expect(carriedBody.input).not.toContain('π');
+
+    await generateTTS(
+      {
+        providerId: 'glm-tts',
+        apiKey: 'glm-key',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        voice: 'tongtong',
+      },
+      first.text,
+    );
+    const directBody = JSON.parse(mockFetch.mock.calls[1][1].body as string) as { input: string };
+    expect(directBody.input).toContain('派');
+    expect(directBody.input).not.toContain('pi');
   });
 });

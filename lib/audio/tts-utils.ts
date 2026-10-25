@@ -161,9 +161,11 @@ export function splitLongSpeechText(
   const chunks: string[] = [];
   let current = '';
 
+  // Keep a hard cut's edge spaces. Trimming would drop a caption character
+  // the next chunk does not contain (the space in "Η τιμή"). A whitespace-only
+  // piece is still skipped, as trim used to do.
   const pushChunk = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) chunks.push(trimmed);
+    if (value.trim()) chunks.push(value);
   };
 
   const appendUnit = (unit: string) => {

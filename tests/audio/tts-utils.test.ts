@@ -159,4 +159,31 @@ describe('splitLongSpeechActions', () => {
     expect(normalizeMathSymbolsForTts(text, 'ja-JP').length).toBe(max);
     expect(splitLongSpeechActions(actions, 'glm-tts')).toBe(actions);
   });
+
+  it('keeps an internal space when a Greek caption is split for the spoken budget', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    const sentence = 'Η τιμή του π είναι περίπου 3.14. ';
+    let text = '';
+    while (text.length < 363) text += sentence;
+    text = text.slice(0, 363);
+    const caption = text.trim();
+
+    // Raw and Greek lengths fit. Japanese expansion of the letters does not,
+    // so the ja budget splits a caption an el voice would have kept whole.
+    expect(text.length).toBeLessThanOrEqual(max);
+    expect(normalizeMathSymbolsForTts(text, 'el-GR').length).toBeLessThanOrEqual(max);
+    expect(normalizeMathSymbolsForTts(text, 'ja').length).toBeGreaterThan(max);
+    expect(caption.includes('Η τιμή')).toBe(true);
+
+    const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+    expect(out.length).toBeGreaterThan(1);
+    // The hard cut lands on the space in "Η τιμή". That space has to stay in
+    // some stored chunk. The outer trim of a final space is unchanged.
+    expect(out.map((action) => action.text).join('')).toBe(caption);
+    for (const chunk of out.map((action) => action.text)) {
+      expect(chunk.includes('π')).toBe(true);
+      expect(normalizeMathSymbolsForTts(chunk, 'ja').length).toBeLessThanOrEqual(max);
+      expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
+    }
+  });
 });

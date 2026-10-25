@@ -845,10 +845,10 @@ export class PlaybackEngine {
     utterance.text = chunkText;
     if (!voiceFound) {
       // Kana anywhere on the line forces ja-JP for every sentence. Any other
-      // line keeps per-sentence detection on the spoken text, so a German
-      // sentence beside Chinese stays the interface locale. Vietnamese still
-      // binds an installed vi voice when one exists.
-      utterance.lang = readingLang ?? detectSpeechLang(chunkText, i18n.language);
+      // line detects language on the caption, before Greek letters are
+      // rewritten. 派 and 阿尔法 add Han and can cross the CJK threshold.
+      // Vietnamese still binds an installed vi voice when one exists.
+      utterance.lang = readingLang ?? detectSpeechLang(rawChunk, i18n.language);
       if (utterance.lang === 'vi-VN') {
         const viVoice = voices.find((v) => v.lang?.toLowerCase().startsWith('vi'));
         if (viVoice) {

@@ -157,9 +157,12 @@ export async function synthesizeNarration(
       `registeredVoiceId=${voxcpmRegisteredVoiceId || 'none'}, audioId=${audioId}, textLen=${text.length}`,
   );
 
-  // Generate audio
+  // Generate audio. A missing reading locale stays a two-argument call:
+  // passing undefined breaks callers that match generateTTS's arity.
   authorizeMediaModel(connection, 'tts', config.modelId);
-  const { audio, format } = await generateTTS(config, text, input.readingLanguage);
+  const { audio, format } = input.readingLanguage
+    ? await generateTTS(config, text, input.readingLanguage)
+    : await generateTTS(config, text);
 
   void recordGenerationUsage({
     kind: 'tts',

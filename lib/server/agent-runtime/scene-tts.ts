@@ -139,24 +139,25 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
     }
     if (input.signal?.aborted) throw new Error('aborted');
     try {
-      const audio = await generateTTS(
-        {
-          providerId,
-          modelId,
-          apiKey,
-          baseUrl: connection.baseUrl,
-          managed: connection.managed,
-          publicOnly: connection.userEndpoint,
-          voice,
-          ...(connection.voices ? { voices: connection.voices } : {}),
-          speed: speech.speed,
-          // The provider's own options (a VoxCPM backend, say).
-          providerOptions: adapterOptions(connection),
-          signal: input.signal,
-        },
-        speech.text,
-        speechChunkReadingLanguage(speech),
-      );
+      const readingLanguage = speechChunkReadingLanguage(speech);
+      const ttsConfig = {
+        providerId,
+        modelId,
+        apiKey,
+        baseUrl: connection.baseUrl,
+        managed: connection.managed,
+        publicOnly: connection.userEndpoint,
+        voice,
+        ...(connection.voices ? { voices: connection.voices } : {}),
+        speed: speech.speed,
+        // The provider's own options (a VoxCPM backend, say).
+        providerOptions: adapterOptions(connection),
+        signal: input.signal,
+      };
+      // A chunk with no saved Japanese reading stays a two-argument call.
+      const audio = readingLanguage
+        ? await generateTTS(ttsConfig, speech.text, readingLanguage)
+        : await generateTTS(ttsConfig, speech.text);
       if (input.signal?.aborted) throw new Error('aborted');
       // The persisted reference is the RELATIVE classroom-media path (the
       // agent runtime has no request origin; relative stays valid on any

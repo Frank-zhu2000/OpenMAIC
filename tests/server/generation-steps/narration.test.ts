@@ -111,7 +111,6 @@ describe('narration step', () => {
         managed: true,
       }),
       'Hello class',
-      undefined,
     );
     expect(trace).toEqual({ providerId: 'openai-tts', voice: 'nova' });
     expect(mocks.recordGenerationUsage).toHaveBeenCalledWith(
@@ -133,7 +132,6 @@ describe('narration step', () => {
     expect(mocks.generateTTS).toHaveBeenCalledWith(
       expect.objectContaining({ voice: 'alloy' }),
       'Hello',
-      undefined,
     );
   });
 

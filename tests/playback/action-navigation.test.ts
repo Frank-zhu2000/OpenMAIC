@@ -867,6 +867,75 @@ describe('PlaybackEngine action navigation', () => {
     expect(spoken[3].text).not.toContain('派');
   });
 
+  it('keeps a saved ja-JP reading when browser TTS falls back on a kana-free chunk', async () => {
+    const spoken: Array<{ text: string; lang: string }> = [];
+    stubSpeechSynthesis(spoken);
+    setModelSettingsViewForTests({ tts: { registryId: 'browser-native-tts' } });
+    const previous = {
+      ttsVoice: useSettingsStore.getState().ttsVoice,
+      ttsVoiceProviderId: useSettingsStore.getState().ttsVoiceProviderId,
+    };
+    useSettingsStore.setState({ ttsVoice: 'default', ttsVoiceProviderId: 'browser-native-tts' });
+
+    try {
+      const line = '円周率π。半径二乗。';
+      const { engine: actionEngine } = createActionEngine();
+      const { player } = createAudioPlayer(async () => false);
+      const engine = new PlaybackEngine(
+        [scene([{ ...speech('ja', line), readingLanguage: 'ja-JP' } as Action])],
+        actionEngine,
+        player,
+      );
+
+      engine.start();
+      await flushPromises();
+
+      expect(spoken[0].text).toBe('円周率pi。');
+      expect(spoken[0].text).not.toContain('派');
+      expect(spoken[0].lang).toBe('ja-JP');
+
+      (spoken[0] as { onend?: () => void }).onend?.();
+      await flushPromises();
+
+      expect(spoken).toHaveLength(2);
+      expect(spoken[1].text).toBe('半径二乗。');
+      expect(spoken[1].lang).toBe('ja-JP');
+    } finally {
+      useSettingsStore.setState(previous);
+    }
+  });
+
+  it('uses a saved ja-JP reading when the selected browser voice is Chinese', async () => {
+    const spoken: Array<{ text: string; lang: string }> = [];
+    stubSpeechSynthesis(spoken, [{ voiceURI: 'zh-voice', lang: 'zh-CN' }]);
+    setModelSettingsViewForTests({ tts: { registryId: 'browser-native-tts' } });
+    const previous = {
+      ttsVoice: useSettingsStore.getState().ttsVoice,
+      ttsVoiceProviderId: useSettingsStore.getState().ttsVoiceProviderId,
+    };
+    useSettingsStore.setState({ ttsVoice: 'zh-voice', ttsVoiceProviderId: 'browser-native-tts' });
+
+    try {
+      const { engine: actionEngine } = createActionEngine();
+      const { player } = createAudioPlayer(async () => false);
+      const engine = new PlaybackEngine(
+        [scene([{ ...speech('ja', '円周率π'), readingLanguage: 'ja-JP' } as Action])],
+        actionEngine,
+        player,
+      );
+
+      engine.start();
+      await flushPromises();
+
+      expect(spoken).toHaveLength(1);
+      expect(spoken[0].text).toBe('円周率pi');
+      expect(spoken[0].text).not.toContain('派');
+      expect(spoken[0].lang).toBe('zh-CN');
+    } finally {
+      useSettingsStore.setState(previous);
+    }
+  });
+
   it('jumping to the last line completes through normal completion flow', async () => {
     vi.useFakeTimers();
     const { engine: actionEngine } = createActionEngine();

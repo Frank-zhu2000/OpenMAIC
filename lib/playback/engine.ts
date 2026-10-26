@@ -50,7 +50,12 @@ import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { ttsSelection } from '@/lib/audio/tts-selection';
 import { detectSpeechLang } from '@/lib/audio/browser-tts-preview';
-import { normalizeMathSymbolsForTts, speechLineReadingLanguage } from '@/lib/audio/tts-utils';
+import {
+  normalizeMathSymbolsForTts,
+  speechChunkReadingLanguage,
+  speechLineReadingLanguage,
+  speechReadingLanguage,
+} from '@/lib/audio/tts-utils';
 import { createLogger } from '@/lib/logger';
 import i18n from '@/lib/i18n/config';
 
@@ -88,6 +93,7 @@ export class PlaybackEngine {
   private browserTTSActive: boolean = false;
   private browserTTSChunks: string[] = []; // sentence-level chunks for sequential playback
   private browserTTSLineText = ''; // whole line, so kana is not re-detected per chunk
+  private browserTTSReadingLanguage: string | undefined; // saved ja-JP on a kana-free chunk
   private browserTTSChunkIndex: number = 0; // current chunk being spoken
   private browserTTSPausedChunks: string[] = []; // remaining chunks saved on pause (for cancel+re-speak)
   private speechTimerRemaining: number = 0; // remaining ms (set on pause)
@@ -792,6 +798,7 @@ export class PlaybackEngine {
   private playBrowserTTS(speechAction: SpeechAction, generation: number): void {
     if (!this.isCurrentGeneration(generation)) return;
     this.browserTTSLineText = speechAction.text;
+    this.browserTTSReadingLanguage = speechChunkReadingLanguage(speechAction);
     this.browserTTSChunks = this.splitIntoChunks(speechAction.text);
     this.browserTTSChunkIndex = 0;
     this.browserTTSPausedChunks = [];
@@ -840,7 +847,12 @@ export class PlaybackEngine {
       }
     }
     const lineText = this.browserTTSLineText || rawChunk;
-    const readingLang = speechLineReadingLanguage(lineText, voiceFound ? voiceLang : undefined);
+    // Saved ja-JP on a kana-free chunk wins over a default or zh voice.
+    // A Greek voice still keeps its letters.
+    const readingLang = speechReadingLanguage(
+      speechLineReadingLanguage(lineText, voiceFound ? voiceLang : undefined),
+      this.browserTTSReadingLanguage,
+    );
     const chunkText = normalizeMathSymbolsForTts(rawChunk, readingLang);
     utterance.text = chunkText;
     if (!voiceFound) {

@@ -96,4 +96,14 @@ describe('normalizeMathSymbolsForTts', () => {
     expect(normalizeMathSymbolsForTts('カタカナπ', 'zh-CN')).toBe('カタカナpi');
     expect(normalizeMathSymbolsForTts('カタカナπ')).toBe('カタカナpi');
   });
+
+  it('treats half-width katakana and katakana extensions as kana, not punctuation', () => {
+    expect(normalizeMathSymbolsForTts('円周率ﾊπﾃﾞｽ')).toBe('円周率ﾊpiﾃﾞｽ');
+    expect(normalizeMathSymbolsForTts('円周率ﾊπﾃﾞｽ', 'zh-CN')).toBe('円周率ﾊpiﾃﾞｽ');
+    expect(normalizeMathSymbolsForTts('円周率\u31F0π')).toBe('円周率\u31F0pi');
+    expect(normalizeMathSymbolsForTts('马丁\uFF65路德的π', 'zh-CN')).toBe('马丁\uFF65路德的派');
+    expect(normalizeMathSymbolsForTts('圆周率\uFF61\uFF64\uFF65π')).toBe(
+      '圆周率\uFF61\uFF64\uFF65派',
+    );
+  });
 });

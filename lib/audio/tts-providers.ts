@@ -119,7 +119,11 @@ import {
 import { ProviderQuotaExhaustedError } from '@/lib/server/provider-quota';
 import { appAttributionHeaders } from '@/lib/config/app-attribution';
 import { pcmS16leMonoToWav } from './pcm-wav';
-import { normalizeMathSymbolsForTts, speechReadingLanguage } from './tts-utils';
+import {
+  normalizeMathSymbolsForTts,
+  speechReadingLanguage,
+  TTS_MAX_TEXT_LENGTH,
+} from './tts-utils';
 
 const log = createLogger('TTSProviders');
 
@@ -311,6 +315,15 @@ export async function generateTTS(
     text,
     speechReadingLanguage(ttsVoiceLanguage(config), readingLanguage),
   );
+  // Direct callers (timeline regeneration, scene narration) do not run
+  // splitLongSpeechActions. Refuse the spoken form before /audio/speech.
+  // The caption argument is left unchanged.
+  const spokenLimit = TTS_MAX_TEXT_LENGTH[config.providerId];
+  if (spokenLimit !== undefined && spokenText.length > spokenLimit) {
+    throw new Error(
+      `${config.providerId} spoken text is ${spokenText.length} characters, over the ${spokenLimit} character limit`,
+    );
+  }
   const signal = ttsRequestSignal(config.signal);
   try {
     switch (config.providerId) {

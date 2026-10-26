@@ -30,6 +30,16 @@ describe('detectSpeechLang', () => {
     expect(detectSpeechLang('\u30fb', 'zh-CN')).toBe('zh-CN');
   });
 
+  it('detects half-width katakana and katakana extensions, not half-width punctuation', () => {
+    expect(detectSpeechLang('円周率ﾊπﾃﾞｽ', 'zh-CN')).toBe('ja-JP');
+    expect(detectSpeechLang('円周率\u31F0', 'zh-CN')).toBe('ja-JP');
+    expect(detectSpeechLang('\uFF66', 'en-US')).toBe('ja-JP');
+    expect(detectSpeechLang('马丁\uFF65路德', 'zh-CN')).toBe('zh-CN');
+    expect(detectSpeechLang('你好\uFF65', 'zh-CN')).toBe('zh-CN');
+    expect(detectSpeechLang('\uFF61\uFF65', 'en-US')).toBe('en-US');
+    expect(detectSpeechLang('\uFF65', 'zh-CN')).toBe('zh-CN');
+  });
+
   it('detects Vietnamese by decisive letters (đ/ơ/ư/ê/ô)', () => {
     expect(detectSpeechLang('Xin chào cả lớp!')).toBe('vi-VN');
     expect(detectSpeechLang('Quang hợp ở thực vật diễn ra như thế nào?')).toBe('vi-VN');

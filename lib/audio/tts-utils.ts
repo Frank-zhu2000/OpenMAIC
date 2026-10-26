@@ -63,12 +63,14 @@ const EN_GREEK_READING = greekReadingTable(2);
 const GREEK_LETTER_RE = new RegExp(`[${Object.keys(ZH_GREEK_READING).join('')}]`, 'gu');
 const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/u;
 /**
- * Hiragana and katakana letters, iteration marks, and the prolonged sound mark.
- * U+30FB (・) and the other punctuation in U+3040–U+30FF are excluded so a
- * Chinese name such as 马丁・路德・金 is not treated as Japanese.
- * Checked before Han. detectLegacyLanguage still matches U+30FB; this class does not.
+ * Hiragana and katakana letters, iteration marks, and the prolonged sound mark,
+ * plus half-width katakana letters (U+FF66–U+FF9D) and katakana phonetic
+ * extensions (U+31F0–U+31FF). Punctuation stays out: U+30FB (・) and
+ * half-width U+FF61–U+FF65. A Chinese name such as 马丁・路德・金 is not
+ * treated as Japanese. Checked before Han. detectLegacyLanguage still matches
+ * U+30FB; this class does not.
  */
-const KANA_RE = /[\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff]/u;
+const KANA_RE = /[\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff\u31f0-\u31ff\uff66-\uff9d]/u;
 const GREEK_CHAR = new Set(Object.keys(ZH_GREEK_READING));
 
 function primarySpeechSubtag(language: string): string {

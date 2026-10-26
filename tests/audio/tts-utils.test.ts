@@ -82,6 +82,15 @@ describe('splitLongSpeechText', () => {
     // The next scene stores those chunk texts and rejoins them with a space.
     expect(previousSpeechTexts(chunks).join(' ')).toBe(long.trim());
   });
+
+  it('does not leave a lone surrogate when the length cut bisects a code point', () => {
+    const text = `😀${'x'.repeat(4)}`;
+    expect(text.slice(0, 1).isWellFormed()).toBe(false);
+    const chunks = splitLongSpeechText(text, 1);
+    expect(chunks.join('')).toBe(text);
+    expect(chunks.some((chunk) => chunk.includes('😀'))).toBe(true);
+    for (const chunk of chunks) expect(chunk.isWellFormed()).toBe(true);
+  });
 });
 
 describe('splitLongSpeechActions', () => {
@@ -326,5 +335,26 @@ describe('splitLongSpeechActions', () => {
     expect(spoken).toContain('pi');
     expect(spoken).not.toContain('派');
     expect(spoken).not.toContain('π');
+  });
+
+  it('does not bisect a supplementary character when the GLM spoken budget cuts beside it', () => {
+    const max = TTS_MAX_TEXT_LENGTH['glm-tts']!;
+    // α expands to "alpha " (ja) while 😀 is one character and two UTF-16 units.
+    // The binary search therefore fits a prefix of 1019 code units, between the surrogates.
+    const text = 'α' + 'x'.repeat(1017) + '😀';
+    expect(text.length).toBe(1020);
+    expect(text.slice(0, 1019).isWellFormed()).toBe(false);
+    expect(normalizeMathSymbolsForTts(text.slice(0, 1019), 'ja').length).toBeLessThanOrEqual(max);
+    expect(normalizeMathSymbolsForTts(text, 'ja').length).toBeGreaterThan(max);
+
+    const out = splitLongSpeechActions([speech('a', text)], 'glm-tts') as SpeechAction[];
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.map((action) => action.text).join('')).toBe(text);
+    expect(out.some((action) => action.text.includes('😀'))).toBe(true);
+    for (const chunk of out.map((action) => action.text)) {
+      expect(chunk.isWellFormed()).toBe(true);
+      expect(normalizeMathSymbolsForTts(chunk, 'ja').length).toBeLessThanOrEqual(max);
+      expect(normalizeMathSymbolsForTts(chunk, 'zh').length).toBeLessThanOrEqual(max);
+    }
   });
 });

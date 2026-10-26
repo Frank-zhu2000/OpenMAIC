@@ -229,6 +229,21 @@ export function splitLongSpeechText(
     current = unit;
   };
 
+  const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  const graphemeSafeCut = (value: string, index: number): number => {
+    if (index <= 0 || index >= value.length) return index;
+    for (const { index: start, segment } of graphemes.segment(value)) {
+      const end = start + segment.length;
+      if (index <= start) return index;
+      if (index < end) return start;
+    }
+    return index;
+  };
+  const firstGraphemeLength = (value: string): number => {
+    const first = graphemes.segment(value)[Symbol.iterator]().next().value;
+    return first?.segment.length || 1;
+  };
+
   const fittingPrefixLength = (unit: string): number => {
     if (lengthOf(unit) <= maxLength) return unit.length;
     let low = 1;
@@ -258,9 +273,14 @@ export function splitLongSpeechText(
 
     let start = 0;
     while (start < unit.length) {
-      const size = fittingPrefixLength(unit.slice(start));
-      appendUnit(unit.slice(start, start + size));
-      start += Math.max(size, 1);
+      const rest = unit.slice(start);
+      // fittingPrefixLength counts UTF-16 units and can land inside a surrogate
+      // pair or a longer grapheme. Step back to the grapheme start. If that is
+      // the start of this slice, keep the whole grapheme rather than one half.
+      let size = graphemeSafeCut(rest, fittingPrefixLength(rest));
+      if (size <= 0) size = firstGraphemeLength(rest);
+      appendUnit(rest.slice(0, size));
+      start += size;
     }
   };
 

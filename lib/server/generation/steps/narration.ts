@@ -160,16 +160,18 @@ export async function synthesizeNarration(
   // Generate audio. A missing reading locale stays a two-argument call:
   // passing undefined breaks callers that match generateTTS's arity.
   authorizeMediaModel(connection, 'tts', config.modelId);
-  const { audio, format } = input.readingLanguage
+  const generated = input.readingLanguage
     ? await generateTTS(config, text, input.readingLanguage)
     : await generateTTS(config, text);
+  const { audio, format } = generated;
 
   void recordGenerationUsage({
     kind: 'tts',
     unit: 'character',
     providerId: ttsProviderId,
     modelId: config.modelId,
-    quantity: text.length,
+    // Count the expanded request generateTTS sent, not the shorter caption.
+    quantity: generated.spokenLength ?? text.length,
   });
 
   return { audio, format, providerId: ttsProviderId, modelId: config.modelId };

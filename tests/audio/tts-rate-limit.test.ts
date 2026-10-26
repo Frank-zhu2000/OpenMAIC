@@ -327,6 +327,7 @@ describe('TTS provider failure classification', () => {
     await expect(generateTTS(miniMaxConfig, 'hello')).resolves.toEqual({
       audio: new Uint8Array([0x00, 0xff]),
       format: 'mp3',
+      spokenLength: 'hello'.length,
     });
   });
 });

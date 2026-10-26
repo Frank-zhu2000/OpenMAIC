@@ -884,15 +884,17 @@ export function planRunStart(input: {
   if (input.plan.kind === 'start') {
     // A session created with opening context requeues its opening message as a
     // durable `user_message` before the runner claims; `pending[0]` is that
-    // message. Its classrooms must reach the model, or the run would not know
-    // which classroom the user named. Nothing else changes: the raw prompt is
-    // still the base. Opening attachments are not copied into this prompt;
-    // `list_materials` lists them. A later message that attaches a file carries
-    // that note itself. Messages that are not the opening one are follow-ups.
-    if (opening?.courseRefs?.length || opening?.elementRefs?.length) {
+    // message. Classrooms, element refs, and attachments on it must reach the
+    // model. The raw prompt stays the base text. The attachment note is the
+    // same one follow-up messages carry, and it stays out of the system prompt.
+    // Messages that are not the opening one are follow-ups.
+    if (
+      opening &&
+      (opening.courseRefs?.length || opening.elementRefs?.length || opening.materials?.length)
+    ) {
       return {
         kind: 'prompt',
-        text: composeFollowUpText({ ...opening, text: input.prompt, materials: undefined }),
+        text: composeFollowUpText({ ...opening, text: input.prompt }),
         ...(opening.durableMessageSeq ? { durableMessageSeq: opening.durableMessageSeq } : {}),
       };
     }

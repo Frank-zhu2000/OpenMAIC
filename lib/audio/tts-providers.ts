@@ -119,11 +119,6 @@ import {
 import { ProviderQuotaExhaustedError } from '@/lib/server/provider-quota';
 import { appAttributionHeaders } from '@/lib/config/app-attribution';
 import { pcmS16leMonoToWav } from './pcm-wav';
-import {
-  normalizeMathSymbolsForTts,
-  speechReadingLanguage,
-  TTS_MAX_TEXT_LENGTH,
-} from './tts-utils';
 
 const log = createLogger('TTSProviders');
 
@@ -147,11 +142,6 @@ function ttsFetch(
 export interface TTSGenerationResult {
   audio: Uint8Array;
   format: string;
-  /**
-   * Characters actually sent to the provider. Set by `generateTTS` after symbol
-   * expansion. Provider adapters omit it; billing must not treat that as zero.
-   */
-  spokenLength?: number;
 }
 
 /**
@@ -311,7 +301,6 @@ export function throwIfTtsRateLimited(
 export async function generateTTS(
   config: TTSModelConfig,
   text: string,
-  readingLanguage?: string,
 ): Promise<TTSGenerationResult> {
   const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
 
@@ -320,63 +309,36 @@ export async function generateTTS(
     throw new Error(`API key required for TTS provider: ${config.providerId}`);
   }
 
-  // Captions keep the symbol. Only the provider request is pronounced.
-  // `readingLanguage` is the whole line's kana decision, carried onto a chunk
-  // that no longer contains the kana. A Greek voice still keeps its letters.
-  const spokenText = normalizeMathSymbolsForTts(
-    text,
-    speechReadingLanguage(ttsVoiceLanguage(config), readingLanguage),
-  );
-  // Direct callers (timeline regeneration, scene narration) do not run
-  // splitLongSpeechActions. Refuse the spoken form before /audio/speech.
-  // The caption argument is left unchanged.
-  const spokenLimit = TTS_MAX_TEXT_LENGTH[config.providerId];
-  if (spokenLimit !== undefined && spokenText.length > spokenLimit) {
-    throw new Error(
-      `${config.providerId} spoken text is ${spokenText.length} characters, over the ${spokenLimit} character limit`,
-    );
-  }
   const signal = ttsRequestSignal(config.signal);
   try {
-    let generated: TTSGenerationResult;
     switch (config.providerId) {
       case 'openai-tts':
-        generated = await generateOpenAITTS(config, spokenText, signal);
-        break;
+        return await generateOpenAITTS(config, text, signal);
 
       case 'azure-tts':
-        generated = await generateAzureTTS(config, spokenText, signal);
-        break;
+        return await generateAzureTTS(config, text, signal);
 
       case 'glm-tts':
-        generated = await generateGLMTTS(config, spokenText, signal);
-        break;
+        return await generateGLMTTS(config, text, signal);
 
       case 'qwen-tts':
-        generated = await generateQwenTTS(config, spokenText, signal);
-        break;
+        return await generateQwenTTS(config, text, signal);
 
       case 'voxcpm-tts':
-        generated = await generateVoxCPMTTS(config, spokenText, signal);
-        break;
+        return await generateVoxCPMTTS(config, text, signal);
 
       case 'minimax-tts':
-        generated = await generateMiniMaxTTS(config, spokenText, signal);
-        break;
+        return await generateMiniMaxTTS(config, text, signal);
       case 'doubao-tts':
-        generated = await generateDoubaoTTS(config, spokenText, signal);
-        break;
+        return await generateDoubaoTTS(config, text, signal);
       case 'elevenlabs-tts':
-        generated = await generateElevenLabsTTS(config, spokenText, signal);
-        break;
+        return await generateElevenLabsTTS(config, text, signal);
 
       case 'google-tts':
-        generated = await generateGoogleTTS(config, spokenText, signal);
-        break;
+        return await generateGoogleTTS(config, text, signal);
 
       case 'lemonade-tts':
-        generated = await generateLemonadeTTS(config, spokenText, signal);
-        break;
+        return await generateLemonadeTTS(config, text, signal);
 
       case 'browser-native-tts':
         throw new Error(
@@ -385,12 +347,10 @@ export async function generateTTS(
 
       default:
         if (isCustomTTSProvider(config.providerId)) {
-          generated = await generateOpenAITTS(config, spokenText, signal);
-          break;
+          return await generateOpenAITTS(config, text, signal);
         }
         throw new Error(`Unsupported TTS provider: ${config.providerId}`);
     }
-    return { ...generated, spokenLength: spokenText.length };
   } catch (error) {
     // A caller cancel must propagate as-is so the enclosing run treats it as an
     // interruption, not a provider failure.
@@ -928,9 +888,6 @@ async function generateAzureTTS(
   return await validateTTSAudioResponse(response, 'Azure', 'mp3');
 }
 
-const AZURE_VOICE_LOCALE_RE =
-  /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?-(?:[A-Z]{2}|\d{3})(?:-(?:[a-z0-9]{5,8}|\d[a-z0-9]{3}))*(?=-[A-Z]|$)/;
-
 /** Resolve the BCP-47 locale encoded by an Azure voice identifier. */
 function resolveAzureVoiceLocale(voice: string): string {
   const configuredVoice = TTS_PROVIDERS['azure-tts'].voices.find(({ id }) => id === voice);
@@ -940,35 +897,11 @@ function resolveAzureVoiceLocale(voice: string): string {
   // `en-US-JennyNeural` or `sr-Latn-RS-SophieNeural`). Preserve optional
   // script and variant subtags for voices outside the small configured list
   // while retaining the existing Chinese default for an unrecognised ID.
-  return voice.match(AZURE_VOICE_LOCALE_RE)?.[0] ?? 'zh-CN';
-}
-
-function listedVoiceLanguage(language: string | undefined): string | undefined {
-  if (!language || language === 'auto') return undefined;
-  return language;
-}
-
-/**
- * Speech locale for Greek-letter readings, when the selected voice has one.
- * A deployment's voice list wins over the built-in catalogue, so a provider-local
- * Japanese voice is not left unknown and then read with the Chinese table.
- * An unrecognised Azure id does not fall back to zh-CN here: that default is
- * only for the SSML language tag. Skipping it keeps non-Han text such as `2πr`
- * off the Chinese table. Han with no kana is still 派 via the Han heuristic.
- */
-function ttsVoiceLanguage(config: TTSModelConfig): string | undefined {
-  const configured = listedVoiceLanguage(
-    config.voices?.find((voice) => voice.id === config.voice)?.language,
+  return (
+    voice.match(
+      /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?-(?:[A-Z]{2}|\d{3})(?:-(?:[a-z0-9]{5,8}|\d[a-z0-9]{3}))*(?=-[A-Z]|$)/,
+    )?.[0] ?? 'zh-CN'
   );
-  if (configured) return configured;
-
-  const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
-  const catalogLanguage = listedVoiceLanguage(
-    provider?.voices.find((voice) => voice.id === config.voice)?.language,
-  );
-  if (catalogLanguage) return catalogLanguage;
-  if (config.providerId === 'azure-tts') return config.voice.match(AZURE_VOICE_LOCALE_RE)?.[0];
-  return undefined;
 }
 
 /**

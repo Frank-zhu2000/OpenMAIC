@@ -50,12 +50,6 @@ import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { ttsSelection } from '@/lib/audio/tts-selection';
 import { detectSpeechLang } from '@/lib/audio/browser-tts-preview';
-import {
-  normalizeMathSymbolsForTts,
-  speechChunkReadingLanguage,
-  speechLineReadingLanguage,
-  speechReadingLanguage,
-} from '@/lib/audio/tts-utils';
 import { createLogger } from '@/lib/logger';
 import i18n from '@/lib/i18n/config';
 
@@ -92,8 +86,6 @@ export class PlaybackEngine {
   // Browser-native TTS state (Web Speech API)
   private browserTTSActive: boolean = false;
   private browserTTSChunks: string[] = []; // sentence-level chunks for sequential playback
-  private browserTTSLineText = ''; // whole line, so kana is not re-detected per chunk
-  private browserTTSReadingLanguage: string | undefined; // saved ja-JP on a kana-free chunk
   private browserTTSChunkIndex: number = 0; // current chunk being spoken
   private browserTTSPausedChunks: string[] = []; // remaining chunks saved on pause (for cancel+re-speak)
   private speechTimerRemaining: number = 0; // remaining ms (set on pause)
@@ -812,8 +804,6 @@ export class PlaybackEngine {
    */
   private playBrowserTTS(speechAction: SpeechAction, generation: number): void {
     if (!this.isCurrentGeneration(generation)) return;
-    this.browserTTSLineText = speechAction.text;
-    this.browserTTSReadingLanguage = speechChunkReadingLanguage(speechAction);
     this.browserTTSChunks = this.splitIntoChunks(speechAction.text);
     this.browserTTSChunkIndex = 0;
     this.browserTTSPausedChunks = [];
@@ -836,8 +826,8 @@ export class PlaybackEngine {
     const settings = useSettingsStore.getState();
     // The user's voice when it was picked for browser speech.
     const selectedVoice = ttsSelection()?.voice;
-    const rawChunk = this.browserTTSChunks[this.browserTTSChunkIndex];
-    const utterance = new SpeechSynthesisUtterance(rawChunk);
+    const chunkText = this.browserTTSChunks[this.browserTTSChunkIndex];
+    const utterance = new SpeechSynthesisUtterance(chunkText);
 
     // Apply settings
     const speed = this.callbacks.getPlaybackSpeed?.() ?? 1;
@@ -848,34 +838,22 @@ export class PlaybackEngine {
     const voices = await this.ensureVoicesLoaded();
     if (!this.isCurrentGeneration(generation)) return;
 
-    // Set voice first so a ja-JP voice is not rewritten with the Chinese reading.
-    // Kana is decided on the whole line, then used for every sentence chunk.
+    // Set voice: try user's configured voice, fall back to auto-detect language
     let voiceFound = false;
-    let voiceLang: string | undefined;
     if (selectedVoice && selectedVoice !== 'default') {
       const voice = voices.find((v) => v.voiceURI === selectedVoice);
       if (voice) {
         utterance.voice = voice;
         utterance.lang = voice.lang;
-        voiceLang = voice.lang || undefined;
         voiceFound = true;
       }
     }
-    const lineText = this.browserTTSLineText || rawChunk;
-    // Saved ja-JP on a kana-free chunk wins over a default or zh voice.
-    // A Greek voice still keeps its letters.
-    const readingLang = speechReadingLanguage(
-      speechLineReadingLanguage(lineText, voiceFound ? voiceLang : undefined),
-      this.browserTTSReadingLanguage,
-    );
-    const chunkText = normalizeMathSymbolsForTts(rawChunk, readingLang);
-    utterance.text = chunkText;
     if (!voiceFound) {
-      // Kana anywhere on the line forces ja-JP for every sentence. Any other
-      // line detects language on the caption, before Greek letters are
-      // rewritten. 派 and 阿尔法 add Han and can cross the CJK threshold.
-      // Vietnamese still binds an installed vi voice when one exists.
-      utterance.lang = readingLang ?? detectSpeechLang(rawChunk, i18n.language);
+      // No usable voice configured — detect text language so the browser
+      // auto-selects an appropriate voice. For Vietnamese additionally bind an
+      // installed vi voice when one exists, since browsers otherwise fall back
+      // to an English voice reading Vietnamese text.
+      utterance.lang = detectSpeechLang(chunkText, i18n.language);
       if (utterance.lang === 'vi-VN') {
         const viVoice = voices.find((v) => v.lang?.toLowerCase().startsWith('vi'));
         if (viVoice) {

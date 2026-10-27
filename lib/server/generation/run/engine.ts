@@ -48,11 +48,7 @@ import { pickNarratorAgent, resolveServerAgentVoiceOptions } from '@/lib/audio/a
 import { voiceBindingKey } from '@/lib/audio/unavailable-voice-bindings';
 import type { ResolvedVoice } from '@/lib/audio/voice-resolver';
 
-import {
-  previousSpeechTexts,
-  speechChunkReadingLanguage,
-  splitLongSpeechActions,
-} from '@/lib/audio/tts-utils';
+import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { validateAppScene } from '@/lib/document-store/validators';
 import { sceneCarriesMediaReference } from '@/lib/media/generated-media-references';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
@@ -236,11 +232,9 @@ export function runRequirements(input: GenerationRunInput, webSearch: boolean): 
 }
 
 function speechesOf(scene: Scene): string[] {
-  return previousSpeechTexts(
-    (scene.actions ?? [])
-      .filter((action): action is SpeechAction => action.type === 'speech')
-      .map((action) => action.text),
-  );
+  return (scene.actions ?? [])
+    .filter((action): action is SpeechAction => action.type === 'speech')
+    .map((action) => action.text);
 }
 
 interface MaterialOutput {
@@ -1024,7 +1018,6 @@ async function executeClaimedRun(
       // A voice of a provider the slot does not name stays unvoiced.
       if (!chosen) return null;
       const { voice, globalVoice } = chosen;
-      const readingLanguage = speechChunkReadingLanguage(action);
       const providerOptions = await resolveServerAgentVoiceOptions(teacher, {
         providerId: voice.providerId,
         providerConfig: clipProviderConfig(target, voice),
@@ -1044,7 +1037,6 @@ async function executeClaimedRun(
                   audioId: `tts_s${scene.order}_${action.id}`,
                   voice: voice.voiceId,
                   speed,
-                  ...(readingLanguage ? { readingLanguage } : {}),
                   ...(providerOptions ? { providerOptions } : {}),
                   fence,
                 },

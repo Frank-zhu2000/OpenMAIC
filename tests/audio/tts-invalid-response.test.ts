@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { generateTTS, TTSInvalidResponseError } from '@/lib/audio/tts-providers';
-import { normalizeMathSymbolsForTts } from '@/lib/audio/tts-utils';
 
 const mockFetch = vi.hoisted(() => vi.fn() as Mock);
 // The provider adapters now issue requests through undici's fetch (with a
@@ -331,47 +330,5 @@ describe('POST /api/generate/tts route handling of invalid responses (#1395)', (
       modelId: 'tts-1',
       quantity: 11,
     });
-  });
-
-  it('records the spoken length when a symbol expands before it is sent', async () => {
-    const { NextRequest } = await import('next/server');
-    const { POST } = await import('@/app/api/generate/tts/route');
-    const caption = 'one divided by π';
-    const spoken = normalizeMathSymbolsForTts(caption, 'en');
-    expect(spoken.length).toBeGreaterThan(caption.length);
-
-    const audioData = wavBytes();
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      headers: { get: () => 'audio/wav' },
-      arrayBuffer: async () => audioData,
-    });
-
-    const req = new NextRequest('http://localhost/api/generate/tts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        text: caption,
-        audioId: 'audio-spoken-length',
-        ttsProviderId: 'openai-tts',
-        ttsModelId: 'tts-1',
-        ttsVoice: 'alloy',
-        ttsApiKey: 'sk-test',
-      }),
-    });
-
-    const res = await POST(req);
-    expect(res.status).toBe(200);
-    const sent = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)).input as string;
-    expect(sent).toBe(spoken);
-    expect(mockRecordGenerationUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'tts',
-        unit: 'character',
-        providerId: 'openai-tts',
-        quantity: sent.length,
-      }),
-    );
   });
 });

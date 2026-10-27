@@ -74,11 +74,10 @@ because the generic scene shape accepts an actions array.
 | `audioInvalidated` | boolean | no | prevents legacy derived-id fallback after invalidation |
 | `voice` | string | no | voice hint/binding field |
 | `speed` | number | no | playback/synthesis speed field |
-| `readingLanguage` | string | no | reading locale kept on a chunk cut from a longer line. `ja-JP` makes a kana-free piece stay Japanese when narration is regenerated. Cleared when `text` changes. |
 
 When a generic pointer changes an existing speech action's `text`,
 `patch_stage` preserves the retired `set_speech` op's safety behavior and
-removes stale `audioId`, historical `audioUrl`, and `readingLanguage` in that op.
+removes stale `audioId` (and historical `audioUrl`) in that op.
 
 The new line is silent until `generate_tts` synthesizes it. `generate_tts`
 remains available.

@@ -94,9 +94,6 @@ export async function generateAndStoreTTS(
   // QWEN_VC_VOICE_NOT_FOUND retry so a chain of dead voices can never loop
   // /api/generate/tts beyond a single fallback hop.
   fallbackHops = 0,
-  // Japanese reading locale saved on a split chunk. A kana-free caption cannot
-  // rediscover it, so the TTS request has to carry the tag.
-  readingLanguage?: string,
 ): Promise<string | null> {
   // The `tts` slot's provider, and the user's voice for it.
   const selection = ttsSelection(await loadModelCapabilities());
@@ -185,7 +182,6 @@ export async function generateAndStoreTTS(
             ttsVoice,
             ttsSpeed: selection.speed,
             ttsProviderOptions: providerOptions,
-            ...(readingLanguage ? { readingLanguage } : {}),
           }),
           signal,
         });
@@ -246,7 +242,6 @@ export async function generateAndStoreTTS(
             stageId,
             globalDiffers ? undefined : retryVoice,
             fallbackHops + 1,
-            readingLanguage,
           );
         }
       }

@@ -171,19 +171,4 @@ describe('allocated speech audio identities', () => {
     );
     expect(mocks.poolRemove).not.toHaveBeenCalled();
   });
-
-  it('forwards a saved Japanese reading locale when regenerating a chunk', async () => {
-    mocks.generateAndStoreTTS.mockResolvedValueOnce('ast_fresh_audio');
-
-    await expect(
-      regenerateSpeechAudio(
-        3,
-        { id: 'a_tts_1', text: '円周率π。', readingLanguage: 'ja-JP' },
-        'zh-CN',
-      ),
-    ).resolves.toBe('ast_fresh_audio');
-
-    expect(mocks.generateAndStoreTTS.mock.calls[0]).toContain('ja-JP');
-    expect(mocks.generateAndStoreTTS.mock.calls[0]?.[1]).toBe('円周率π。');
-  });
 });

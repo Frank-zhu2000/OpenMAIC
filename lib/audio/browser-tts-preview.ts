@@ -28,16 +28,10 @@ function createAbortError(): Error {
 const VI_DECIDER_RE = /[đĐơƠưƯ\u1EA0-\u1EF9]/;
 const VI_BROAD_RE = /[ăâêôĂÂÊÔ]/g;
 const VI_BROAD_THRESHOLD = 0.02;
-// Hiragana and katakana letters, half-width katakana letters (U+FF66–U+FF9D),
-// and katakana phonetic extensions (U+31F0–U+31FF). U+30FB (・) and
-// half-width punctuation U+FF61–U+FF65 are not kana, so a Chinese name such
-// as 马丁・路德・金 stays on the Han-ratio path.
-const KANA_RE = /[\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff\u31f0-\u31ff\uff66-\uff9d]/u;
 
-/** Detect Japanese, Chinese, or Vietnamese. Kana wins over kanji; a Chinese UI locale keeps its region. */
+/** Detect Chinese/Vietnamese text, retaining the UI's Chinese region when available. */
 export function detectSpeechLang(text: string, fallbackLang = 'en-US'): string {
   if (!text) return fallbackLang || 'en-US';
-  if (KANA_RE.test(text)) return 'ja-JP';
   const cjkRatio = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length / text.length;
   if (cjkRatio > CJK_LANG_THRESHOLD) {
     // 汉字比例只能识别语言，不能区分地区；中文界面继续使用用户所在地区的音色。

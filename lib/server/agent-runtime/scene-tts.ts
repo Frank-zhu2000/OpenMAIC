@@ -9,7 +9,6 @@ import { configuredDefaultVoice } from '@/lib/audio/provider-default-voice';
 import { authorizeMediaModel } from '@/lib/server/model-config/media';
 import { DEFAULT_TTS_MODELS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { generateTTS, TTSRateLimitError, TTSRequestTimeoutError } from '@/lib/audio/tts-providers';
-import { speechChunkReadingLanguage } from '@/lib/audio/tts-utils';
 import { runFailureCode, type RunFailureErrorCode } from '@/lib/server/generation/run/failure-code';
 import { SCENE_MAX_RETRIES, withRouteRetry } from '@/lib/server/generation/run/retry';
 import { isUpstreamQuotaExhausted } from '@/lib/server/llm-error-response';
@@ -355,25 +354,23 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
                   return undefined;
                 }
                 try {
-                  const readingLanguage = speechChunkReadingLanguage(speech);
-                  const ttsConfig = {
-                    providerId,
-                    modelId,
-                    apiKey,
-                    baseUrl: connection.baseUrl,
-                    managed: connection.managed,
-                    publicOnly: connection.userEndpoint,
-                    voice,
-                    ...(connection.voices ? { voices: connection.voices } : {}),
-                    speed: speech.speed,
-                    // The provider's own options (a VoxCPM backend, say).
-                    providerOptions: adapterOptions(connection),
-                    signal: input.signal,
-                  };
-                  // A chunk with no saved Japanese reading stays a two-argument call.
-                  return readingLanguage
-                    ? await generateTTS(ttsConfig, speech.text, readingLanguage)
-                    : await generateTTS(ttsConfig, speech.text);
+                  return await generateTTS(
+                    {
+                      providerId,
+                      modelId,
+                      apiKey,
+                      baseUrl: connection.baseUrl,
+                      managed: connection.managed,
+                      publicOnly: connection.userEndpoint,
+                      voice,
+                      ...(connection.voices ? { voices: connection.voices } : {}),
+                      speed: speech.speed,
+                      // The provider's own options (a VoxCPM backend, say).
+                      providerOptions: adapterOptions(connection),
+                      signal: input.signal,
+                    },
+                    speech.text,
+                  );
                 } catch (error) {
                   lastError = error;
                   // Quota exhaustion is not a retryable rate limit. Do not keep its Retry-After.

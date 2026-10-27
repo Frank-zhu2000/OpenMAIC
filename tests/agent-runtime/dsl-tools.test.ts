@@ -1539,19 +1539,12 @@ describe('patch_stage robustness', () => {
         {
           op: 'set',
           path: '/actions/0',
-          value: {
-            id: 'act-1',
-            type: 'speech',
-            text: 'Different',
-            audioId: 'asset-old',
-            readingLanguage: 'ja-JP',
-          },
+          value: { id: 'act-1', type: 'speech', text: 'Different', audioId: 'asset-old' },
         },
       ],
     } as never);
     expect(changed).not.toHaveProperty('isError');
     expect(current.get().scenes[0]!.actions![0]).not.toHaveProperty('audioId');
-    expect(current.get().scenes[0]!.actions![0]).not.toHaveProperty('readingLanguage');
 
     const fresh = state(course([richSlideScene()]));
     const freshPatch = tool(dslTools(fresh.store), 'patch_stage');

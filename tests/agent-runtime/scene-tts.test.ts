@@ -24,12 +24,10 @@ vi.mock('@/lib/server/classroom-media-bytes', () => ({
   persistClassroomMediaBytes: mocks.persist,
 }));
 
-import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import {
   describeNarrationVoice,
   synthesizeSceneNarration,
 } from '@/lib/server/agent-runtime/scene-tts';
-import type { SpeechAction } from '@/lib/types/action';
 import type { GeneratedAgentConfig } from '@/lib/types/stage';
 import type { Scene } from '@/lib/types/stage';
 
@@ -83,33 +81,6 @@ describe('scene TTS capability routing', () => {
     expect(mocks.persist).toHaveBeenCalledWith(
       expect.objectContaining({ stageId: 'stage-a', mime: 'audio/mpeg' }),
     );
-  });
-
-  it('passes a saved Japanese reading locale for a kana-free chunk', async () => {
-    const text = `${'円周率π。'.repeat(169)}これは授業の説明です。`;
-    const split = splitLongSpeechActions([{ id: 'a', type: 'speech', text }], 'glm-tts');
-    const saved = JSON.parse(JSON.stringify(split)) as SpeechAction[];
-    expect(saved[0].text.includes('こ')).toBe(false);
-    expect(saved[0].text.includes('π')).toBe(true);
-
-    mocks.providers.mockResolvedValue({
-      providerId: 'glm-tts',
-      apiKey: 'glm-key',
-      managed: true,
-      userEndpoint: false,
-      origin: 'configuration',
-      voices: [{ id: 'tongtong', name: 'Tongtong', language: 'zh' }],
-    });
-    mocks.generate.mockResolvedValue({ audio: new Uint8Array([1]), format: 'wav' });
-    mocks.persist.mockResolvedValue('/api/classroom-media/stage-a/media/tts.wav');
-
-    const target = { ...structuredClone(scene), actions: saved } as Scene;
-    await synthesizeSceneNarration({ scene: target, force: true });
-
-    expect(mocks.generate.mock.calls[0]?.[1]).toBe(saved[0].text);
-    expect(mocks.generate.mock.calls[0]?.[1]).not.toContain('派');
-    expect(mocks.generate.mock.calls[0]?.[1]).not.toContain('pi');
-    expect(mocks.generate.mock.calls[0]?.[2]).toBe('ja-JP');
   });
 
   describe('voice reporting', () => {
